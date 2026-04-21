@@ -34,3 +34,24 @@ class GuruQueryService:
 
     def find_gurus_holding(self, issuer_name: str | None = None, cusip: str | None = None) -> list[dict]:
         return self.repo.find_gurus_holding(issuer_name=issuer_name, cusip=cusip)
+
+    def get_new_positions_by_sector(self) -> list[dict]:
+        return self.repo.get_sector_change_counts(change_type='NEW')
+
+    def get_add_positions_by_sector(self) -> list[dict]:
+        return self.repo.get_sector_change_counts(change_type='ADD')
+
+    def get_exit_positions_by_sector(self) -> list[dict]:
+        return self.repo.get_sector_change_counts(change_type='EXIT')
+
+    def get_net_sector_movement(self) -> list[dict]:
+        return self.repo.get_sector_net_movement()
+
+    def get_top_sectors_by_guru(self, guru_id: int, limit: int = 10) -> list[dict]:
+        return self.repo.get_top_sectors_by_guru(guru_id=guru_id, limit=limit)
+
+    def get_gurus_buying_sector(self, sector_bucket: str, limit: int = 200) -> list[dict]:
+        return self.repo.get_gurus_buying_sector(sector_bucket=sector_bucket, limit=limit)
+
+    def get_unmapped_companies(self, limit: int = 200) -> list[dict]:
+        return self.repo.get_unmapped_companies(limit=limit)

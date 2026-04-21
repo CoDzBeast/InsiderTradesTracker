@@ -17,6 +17,8 @@ Core tables:
 - `guru_filings`
 - `guru_holdings`
 - `guru_changes`
+- `companies` (SEC enrichment + internal sector buckets)
+- `sic_sector_map` (maintainable SEC-to-internal mapping rules)
 
 Schema and DB bootstrap live in `tracker/db.py`.
 
@@ -26,6 +28,7 @@ Schema and DB bootstrap live in `tracker/db.py`.
 - `python scripts/backfill_gurus.py --resume --quarters 2 --limit-gurus 5` – polite/resumable safe backfill.
 - `python scripts/update_gurus.py` – incremental latest filings refresh.
 - `python scripts/compute_changes.py` – compute and persist QoQ changes.
+- `python scripts/enrich_companies.py --show-unmapped` – enrich holdings with SEC SIC inputs and map into canonical sectors.
 
 ### Safe SEC backfill settings (environment variables)
 
@@ -65,3 +68,29 @@ Backfill CLI options:
 
 - SEC raw responses are cached to `data/sec_cache/` with deterministic CIK/accession paths.
 - `guru_filings` tracks `fetch_status`, `parse_status`, `retry_count`, `last_attempt_at`, and `error_message` so runs can resume safely.
+
+
+## Canonical sector taxonomy
+
+Canonical sector values are centralized in `tracker/gurus/classification.py` as `CANONICAL_SECTORS`.
+`companies.sector_bucket` stores one of these exact values (or `NULL` if unmapped).
+
+Mapping flow:
+1. Fetch SEC-native attributes (`sic`, `sicDescription`, issuer metadata) from `https://data.sec.gov/submissions/CIK##########.json`.
+2. Map SEC SIC code/description into internal sectors via deterministic rules in `sic_sector_map` + classifier fallbacks.
+3. Persist canonical output to `companies.sector_bucket` for frontend grouping.
+
+Fallback order used by classifier:
+1. exact SIC code match
+2. SIC description keyword match
+3. normalized issuer-name heuristic
+4. mark as unmapped (`sector_bucket=NULL`, `needs_classification=1`)
+
+## Sector aggregation query helpers
+
+`GuruQueryService` includes helper methods for:
+- NEW/ADD/EXIT counts by sector
+- net sector movement
+- top sectors for a guru
+- all gurus buying in a given sector
+- unmapped company review queue
