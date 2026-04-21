@@ -199,11 +199,12 @@ def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: Backfill
     gurus = pipeline.load_tracked_gurus()
     if backfill_options.limit_gurus is not None:
         gurus = gurus[:backfill_options.limit_gurus]
+    logger.info('Loaded %s tracked gurus from %s', len(gurus), pipeline.config_path)
 
-    for guru in gurus:
+    for guru_index, guru in enumerate(gurus, start=1):
         guru_name = guru['guru_name']
         manager_name = guru['manager_name']
-        logger.info('Processing guru: %s (%s)', guru_name, manager_name)
+        logger.info('Processing guru %s/%s: %s (%s)', guru_index, len(gurus), guru_name, manager_name)
 
         guru_id = repo.upsert_guru(guru_name=guru_name, manager_name=manager_name)
 
@@ -220,9 +221,23 @@ def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: Backfill
 
         submissions = pipeline.fetch_submissions(cik)
         filings = pipeline.latest_13f_filings(submissions, limit=backfill_options.per_guru_limit)
+        logger.info(
+            'Found %s filings to evaluate for %s (requested latest %s quarters)',
+            len(filings),
+            guru_name,
+            backfill_options.per_guru_limit,
+        )
         summary['gurus_processed'] += 1
 
-        for filing in filings:
+        for filing_index, filing in enumerate(filings, start=1):
+            logger.info(
+                'Filing %s/%s for %s: accession=%s filing_date=%s',
+                filing_index,
+                len(filings),
+                guru_name,
+                filing.accession_number,
+                filing.filing_date,
+            )
             progress = repo.get_backfill_progress(guru_id, filing.accession_number)
             if (
                 backfill_options.resume
