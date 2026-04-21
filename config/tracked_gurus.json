@@ -1,60 +1,338 @@
 [
-  {"guru_name":"Warren Buffett","manager_name":"Berkshire Hathaway Inc"},
-  {"guru_name":"Bill Ackman","manager_name":"Pershing Square Capital Management"},
-  {"guru_name":"David Einhorn","manager_name":"Greenlight Capital"},
-  {"guru_name":"Carl Icahn","manager_name":"Icahn Capital Management"},
-  {"guru_name":"Seth Klarman","manager_name":"The Baupost Group"},
-  {"guru_name":"Stanley Druckenmiller","manager_name":"Duquesne Capital Management"},
-  {"guru_name":"Steven Cohen","manager_name":"Point72 Asset Management"},
-  {"guru_name":"Steve Mandel","manager_name":"Lone Pine Capital"},
-  {"guru_name":"David Tepper","manager_name":"Appaloosa Management"},
-  {"guru_name":"Ray Dalio","manager_name":"Bridgewater Associates"},
-
-  {"guru_name":"Akre Capital","manager_name":"Akre Capital Management"},
-  {"guru_name":"Ariel Investments","manager_name":"Ariel Investment LLC"},
-  {"guru_name":"Brave Warrior","manager_name":"Brave Warrior Advisors"},
-  {"guru_name":"Caxton Associates","manager_name":"Caxton Associates"},
-  {"guru_name":"Dodge & Cox","manager_name":"Dodge & Cox"},
-  {"guru_name":"Fisher Investments","manager_name":"Fisher Asset Management"},
-  {"guru_name":"GMO","manager_name":"GMO LLC"},
-  {"guru_name":"Gotham Capital","manager_name":"Gotham Asset Management"},
-  {"guru_name":"Glenview Capital","manager_name":"Glenview Capital"},
-  {"guru_name":"Himalaya Capital","manager_name":"Himalaya Capital Management"},
-  {"guru_name":"Hotchkis & Wiley","manager_name":"Hotchkis & Wiley"},
-  {"guru_name":"Hussman Funds","manager_name":"Hussman Strategic Advisors"},
-  {"guru_name":"JANA Partners","manager_name":"JANA Partners LLC"},
-  {"guru_name":"Kahn Brothers","manager_name":"Kahn Brothers"},
-  {"guru_name":"Maverick Capital","manager_name":"Maverick Capital"},
-  {"guru_name":"Omega Advisors","manager_name":"Omega Advisors"},
-  {"guru_name":"Parnassus","manager_name":"Parnassus Investments"},
-  {"guru_name":"Polaris Capital","manager_name":"Polaris Capital"},
-  {"guru_name":"Royce Funds","manager_name":"Royce Investment Partners"},
-  {"guru_name":"Sands Capital","manager_name":"Sands Capital Management"},
-  {"guru_name":"Third Point","manager_name":"Third Point LLC"},
-  {"guru_name":"Tweedy Browne","manager_name":"Tweedy Browne Company"},
-  {"guru_name":"ValueAct","manager_name":"ValueAct Holdings"},
-  {"guru_name":"Viking Global","manager_name":"Viking Global Investors"},
-  {"guru_name":"Wedgewood","manager_name":"Wedgewood Partners"},
-  {"guru_name":"Yacktman","manager_name":"Yacktman Asset Management"},
-
-  {"guru_name":"Abrams Capital","manager_name":"Abrams Capital Management"},
-  {"guru_name":"Auxier","manager_name":"Auxier Asset Management"},
-  {"guru_name":"Barrow Hanley","manager_name":"Barrow Hanley Mewhinney & Strauss"},
-  {"guru_name":"Brandes","manager_name":"Brandes Investment Partners"},
-  {"guru_name":"Chou Associates","manager_name":"Chou Associates Management"},
-  {"guru_name":"Davis Advisors","manager_name":"Davis Selected Advisers"},
-  {"guru_name":"Diamond Hill","manager_name":"Diamond Hill Capital"},
-  {"guru_name":"First Eagle","manager_name":"First Eagle Investment Management"},
-  {"guru_name":"First Pacific","manager_name":"First Pacific Advisors"},
-  {"guru_name":"Gardner Russo","manager_name":"Gardner Russo & Quinn"},
-  {"guru_name":"Markel","manager_name":"Markel Gayner Asset Management"},
-  {"guru_name":"Mairs & Power","manager_name":"Mairs & Power"},
-  {"guru_name":"Manning & Napier","manager_name":"Manning & Napier Advisors"},
-  {"guru_name":"Moore Capital","manager_name":"Moore Capital Management"},
-  {"guru_name":"Oaktree","manager_name":"Oaktree Capital Management"},
-  {"guru_name":"Paulson & Co","manager_name":"Paulson & Co"},
-  {"guru_name":"Pennant","manager_name":"Pennant Investors"},
-  {"guru_name":"Third Avenue","manager_name":"Third Avenue Management"},
-  {"guru_name":"Van Den Berg","manager_name":"Van Den Berg Management"},
-  {"guru_name":"Wasatch","manager_name":"Wasatch Advisors"}
+  {
+    "guru_name": "Warren Buffett",
+    "manager_name": "Berkshire Hathaway Inc",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Bill Ackman",
+    "manager_name": "Pershing Square Capital Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "David Einhorn",
+    "manager_name": "Greenlight Capital",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Carl Icahn",
+    "manager_name": "Icahn Capital Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Seth Klarman",
+    "manager_name": "The Baupost Group",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Stanley Druckenmiller",
+    "manager_name": "Duquesne Capital Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Steven Cohen",
+    "manager_name": "Point72 Asset Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Steve Mandel",
+    "manager_name": "Lone Pine Capital",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "David Tepper",
+    "manager_name": "Appaloosa Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Ray Dalio",
+    "manager_name": "Bridgewater Associates",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Akre Capital",
+    "manager_name": "Akre Capital Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Ariel Investments",
+    "manager_name": "Ariel Investment LLC",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Brave Warrior",
+    "manager_name": "Brave Warrior Advisors",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Caxton Associates",
+    "manager_name": "Caxton Associates",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Dodge & Cox",
+    "manager_name": "Dodge & Cox",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Fisher Investments",
+    "manager_name": "Fisher Asset Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "GMO",
+    "manager_name": "GMO LLC",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Gotham Capital",
+    "manager_name": "Gotham Asset Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Glenview Capital",
+    "manager_name": "Glenview Capital",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Himalaya Capital",
+    "manager_name": "Himalaya Capital Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Hotchkis & Wiley",
+    "manager_name": "Hotchkis & Wiley",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Hussman Funds",
+    "manager_name": "Hussman Strategic Advisors",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "JANA Partners",
+    "manager_name": "JANA Partners LLC",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Kahn Brothers",
+    "manager_name": "Kahn Brothers",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Maverick Capital",
+    "manager_name": "Maverick Capital",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Omega Advisors",
+    "manager_name": "Omega Advisors",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Parnassus",
+    "manager_name": "Parnassus Investments",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Polaris Capital",
+    "manager_name": "Polaris Capital",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Royce Funds",
+    "manager_name": "Royce Investment Partners",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Sands Capital",
+    "manager_name": "Sands Capital Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Third Point",
+    "manager_name": "Third Point LLC",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Tweedy Browne",
+    "manager_name": "Tweedy Browne Company",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "ValueAct",
+    "manager_name": "ValueAct Holdings",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Viking Global",
+    "manager_name": "Viking Global Investors",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Wedgewood",
+    "manager_name": "Wedgewood Partners",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Yacktman",
+    "manager_name": "Yacktman Asset Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Abrams Capital",
+    "manager_name": "Abrams Capital Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Auxier",
+    "manager_name": "Auxier Asset Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Barrow Hanley",
+    "manager_name": "Barrow Hanley Mewhinney & Strauss",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Brandes",
+    "manager_name": "Brandes Investment Partners",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Chou Associates",
+    "manager_name": "Chou Associates Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Davis Advisors",
+    "manager_name": "Davis Selected Advisers",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Diamond Hill",
+    "manager_name": "Diamond Hill Capital",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "First Eagle",
+    "manager_name": "First Eagle Investment Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "First Pacific",
+    "manager_name": "First Pacific Advisors",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Gardner Russo",
+    "manager_name": "Gardner Russo & Quinn",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Markel",
+    "manager_name": "Markel Gayner Asset Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Mairs & Power",
+    "manager_name": "Mairs & Power",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Manning & Napier",
+    "manager_name": "Manning & Napier Advisors",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Moore Capital",
+    "manager_name": "Moore Capital Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Oaktree",
+    "manager_name": "Oaktree Capital Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Paulson & Co",
+    "manager_name": "Paulson & Co",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Pennant",
+    "manager_name": "Pennant Investors",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Third Avenue",
+    "manager_name": "Third Avenue Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Van Den Berg",
+    "manager_name": "Van Den Berg Management",
+    "cik": "",
+    "enabled": true
+  },
+  {
+    "guru_name": "Wasatch",
+    "manager_name": "Wasatch Advisors",
+    "cik": "",
+    "enabled": true
+  }
 ]

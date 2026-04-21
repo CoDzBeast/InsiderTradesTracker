@@ -8,31 +8,30 @@ This project is being refactored into a focused backend for tracking selected in
 - Uses only SEC EDGAR endpoints (no paid APIs)
 - Ingests 13F-HR filings and parses `informationTable.xml` holdings
 - Computes quarter-over-quarter position changes (`NEW`, `ADD`, `REDUCE`, `EXIT`)
+- Keeps legacy insider code in place but does not require broad insider ingestion
 
-## Data model (Postgres)
+## Data model (SQLite now, Postgres-ready abstraction)
 
 Core tables:
 - `tracked_gurus`
 - `guru_filings`
 - `guru_holdings`
 - `guru_changes`
-- `guru_backfill_progress` (resumable fetch/parse checkpoints per guru filing)
 
-Schema SQL lives in `tracker/gurus/models.py`.
+Schema and DB bootstrap live in `tracker/db.py`.
 
 ## Scripts
 
-Set `DATABASE_URL` to a Postgres DSN and run:
-
-- `python scripts/backfill_gurus.py --resume --quarters 2 --limit-gurus 20` – initialize schema + polite/resumable latest-2-quarters backfill
-- `python scripts/update_gurus.py` – incremental update for latest 13F filings
-- `python scripts/compute_changes.py` – compute and persist QoQ changes
+- `python scripts/init_db.py` – create data folder + SQLite DB + all required tables.
+- `python scripts/backfill_gurus.py --resume --quarters 2 --limit-gurus 5` – polite/resumable safe backfill.
+- `python scripts/update_gurus.py` – incremental latest filings refresh.
+- `python scripts/compute_changes.py` – compute and persist QoQ changes.
 
 ### Safe SEC backfill settings (environment variables)
 
-These default to conservative values if not provided:
+Defaults are conservative if not provided:
 
-- `SEC_USER_AGENT=\"GuruTracker/0.1 your_email@example.com\"`
+- `SEC_USER_AGENT="GuruTracker/0.1 your_email@example.com"` (**must customize with real contact**)
 - `SEC_TIMEOUT_SECONDS=20`
 - `SEC_MAX_RETRIES=5`
 - `SEC_BASE_DELAY_SECONDS=1.0`
@@ -41,15 +40,28 @@ These default to conservative values if not provided:
 - `SEC_ENABLE_CACHE=true`
 - `SEC_INITIAL_QUARTERS=2`
 - `SEC_GURU_BATCH_SIZE=20`
+- `SEC_MAX_RETRIES_PER_FILING=5`
 
-The backfill script also supports:
+Backfill CLI options:
 
 - `--latest-only` (forces one quarter)
 - `--quarters N` (latest N quarters per guru)
 - `--limit-gurus N`
 - `--resume` (skip already-completed filings; retry only incomplete/failed)
+- `--max-filing-retries N`
+
+## Backend query helpers for frontend readiness
+
+`tracker/gurus/queries.py` provides helper methods for:
+
+- all tracked gurus
+- latest filings for a guru
+- latest holdings for a guru
+- changes for a guru
+- biggest adds/new/exits across gurus
+- gurus holding a matching issuer/cusip
 
 ## Notes
 
-- Legacy Form 4 parsing code is retained but broad ingestion is disabled unless
-  `ENABLE_FORM4_INGESTION=1` is explicitly set.
+- SEC raw responses are cached to `data/sec_cache/` with deterministic CIK/accession paths.
+- `guru_filings` tracks `fetch_status`, `parse_status`, `retry_count`, `last_attempt_at`, and `error_message` so runs can resume safely.

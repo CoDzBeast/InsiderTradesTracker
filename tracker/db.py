@@ -30,6 +30,7 @@ def get_conn() -> sqlite3.Connection:
         db_file.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(db_file)
         conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA foreign_keys = ON')
         return conn
 
     if DB_ENGINE == 'postgres':
@@ -95,6 +96,7 @@ def init_db() -> None:
                 error_message TEXT,
                 raw_index_path TEXT,
                 raw_xml_path TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (guru_id) REFERENCES tracked_gurus(id) ON DELETE CASCADE,
                 UNIQUE (guru_id, accession_number)
             );
@@ -130,8 +132,21 @@ def init_db() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_guru_filings_guru_id ON guru_filings(guru_id);
+            CREATE INDEX IF NOT EXISTS idx_guru_filings_report_period ON guru_filings(guru_id, report_period DESC);
             CREATE INDEX IF NOT EXISTS idx_guru_holdings_filing_id ON guru_holdings(filing_id);
+            CREATE INDEX IF NOT EXISTS idx_guru_holdings_cusip ON guru_holdings(cusip);
             CREATE INDEX IF NOT EXISTS idx_guru_changes_guru_id ON guru_changes(guru_id);
             """
         )
+
+        columns = {
+            row['name']
+            for row in conn.execute("PRAGMA table_info('guru_filings')").fetchall()
+        }
+        if 'created_at' not in columns:
+            conn.execute(
+                "ALTER TABLE guru_filings "
+                "ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            )
+
         conn.commit()
