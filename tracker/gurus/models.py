@@ -52,9 +52,28 @@ CREATE TABLE IF NOT EXISTS guru_changes (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS guru_backfill_progress (
+    id BIGSERIAL PRIMARY KEY,
+    guru_id BIGINT NOT NULL REFERENCES tracked_gurus(id) ON DELETE CASCADE,
+    guru_name TEXT NOT NULL,
+    manager_name TEXT NOT NULL,
+    cik VARCHAR(10),
+    accession_number TEXT NOT NULL,
+    filing_date DATE NOT NULL,
+    fetch_status TEXT NOT NULL DEFAULT 'pending',
+    parse_status TEXT NOT NULL DEFAULT 'pending',
+    last_attempt_at TIMESTAMPTZ,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (guru_id, accession_number)
+);
+
 CREATE INDEX IF NOT EXISTS idx_guru_filings_guru_id ON guru_filings(guru_id);
 CREATE INDEX IF NOT EXISTS idx_guru_holdings_filing_id ON guru_holdings(filing_id);
 CREATE INDEX IF NOT EXISTS idx_guru_changes_guru_id ON guru_changes(guru_id);
+CREATE INDEX IF NOT EXISTS idx_guru_backfill_progress_guru_id ON guru_backfill_progress(guru_id);
 """
 
 

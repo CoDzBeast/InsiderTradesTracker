@@ -162,3 +162,69 @@ class GuruRepository:
         with self.connection.cursor() as cursor:
             cursor.execute('SELECT id, guru_name FROM tracked_gurus WHERE enabled = TRUE')
             return cursor.fetchall()
+
+    def get_backfill_progress(self, guru_id: int, accession_number: str) -> dict | None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT fetch_status, parse_status, retry_count
+                FROM guru_backfill_progress
+                WHERE guru_id = %s AND accession_number = %s
+                """,
+                (guru_id, accession_number),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return {'fetch_status': row[0], 'parse_status': row[1], 'retry_count': row[2]}
+
+    def upsert_backfill_progress(
+        self,
+        guru_id: int,
+        guru_name: str,
+        manager_name: str,
+        cik: str,
+        accession_number: str,
+        filing_date,
+        fetch_status: str,
+        parse_status: str,
+        error_message: str | None,
+    ) -> None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO guru_backfill_progress (
+                    guru_id, guru_name, manager_name, cik, accession_number, filing_date,
+                    fetch_status, parse_status, last_attempt_at, retry_count, error_message, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), 0, %s, NOW())
+                ON CONFLICT (guru_id, accession_number)
+                DO UPDATE SET
+                    guru_name = EXCLUDED.guru_name,
+                    manager_name = EXCLUDED.manager_name,
+                    cik = EXCLUDED.cik,
+                    filing_date = EXCLUDED.filing_date,
+                    fetch_status = EXCLUDED.fetch_status,
+                    parse_status = EXCLUDED.parse_status,
+                    last_attempt_at = NOW(),
+                    retry_count = CASE
+                        WHEN EXCLUDED.fetch_status = 'completed' AND EXCLUDED.parse_status = 'completed'
+                            THEN guru_backfill_progress.retry_count
+                        ELSE guru_backfill_progress.retry_count + 1
+                    END,
+                    error_message = EXCLUDED.error_message,
+                    updated_at = NOW()
+                """,
+                (
+                    guru_id,
+                    guru_name,
+                    manager_name,
+                    cik,
+                    accession_number,
+                    filing_date,
+                    fetch_status,
+                    parse_status,
+                    error_message,
+                ),
+            )
+        self.connection.commit()
