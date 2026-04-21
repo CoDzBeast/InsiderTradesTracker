@@ -3,6 +3,7 @@ Latest Insider Trades Tracker Module
 """
 
 from pathlib import Path
+import os
 
 import pandas as pd
 
@@ -36,8 +37,13 @@ class LatestInsiderTrades:
         Get the latest insider trades filings.
         """
 
-        # Get the latest filings
-        latest_filings = self.screener.get_filings()
+        # Broad insider ingestion is disabled by default for guru-focused backend.
+        # Set ENABLE_FORM4_INGESTION=1 to re-enable legacy behavior.
+        if os.environ.get('ENABLE_FORM4_INGESTION', '0') != '1':
+            latest_filings = pd.DataFrame(columns=['title', 'form', 'filing_date', 'link'])
+        else:
+            # Get the latest filings
+            latest_filings = self.screener.get_filings()
 
         # Cache the latest filings
         self.latest_filings = latest_filings
