@@ -16,6 +16,7 @@ gunicorn = "*"
 pyyaml = "*"
 pytest = "*"
 pylint = "*"
+psycopg2-binary = "*"
 
 [dev-packages]
 

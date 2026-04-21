@@ -1,12 +1,33 @@
-# InsiderTradesTracker
-[![CircleCI](https://circleci.com/gh/punitarani/InsiderTradesTracker.svg?style=shield)](https://circleci.com/gh/punitarani/InsiderTradesTracker)
-[![CodeQL](https://github.com/punitarani/InsiderTradesTracker/actions/workflows/codeql.yml/badge.svg)](https://github.com/punitarani/InsiderTradesTracker/actions/workflows/codeql.yml)
-[![Dependency Review](https://github.com/punitarani/InsiderTradesTracker/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/punitarani/InsiderTradesTracker/actions/workflows/dependency-review.yml)
-[![Pylint](https://github.com/punitarani/InsiderTradesTracker/actions/workflows/pylint.yml/badge.svg)](https://github.com/punitarani/InsiderTradesTracker/actions/workflows/pylint.yml)
+# InsiderTradesTracker (Guru 13F Backend)
 
+This project is being refactored into a focused backend for tracking selected institutional investors ("gurus") through SEC Form 13F filings.
 
-Tracks SEC Forms 4 and Analyzes Trades in Realtime.
+## Scope
 
-Website: [Insider Trades Tracker](https://insider-trades-tracker.herokuapp.com/).
+- Tracks only the managers configured in `config/tracked_gurus.json`
+- Uses only SEC EDGAR endpoints (no paid APIs)
+- Ingests 13F-HR filings and parses `informationTable.xml` holdings
+- Computes quarter-over-quarter position changes (`NEW`, `ADD`, `REDUCE`, `EXIT`)
 
-![Website Demo](https://github.com/punitarani/InsiderTradesTracker/blob/main/assets/demo/tracker_demo.png?raw=true)
+## Data model (Postgres)
+
+Core tables:
+- `tracked_gurus`
+- `guru_filings`
+- `guru_holdings`
+- `guru_changes`
+
+Schema SQL lives in `tracker/gurus/models.py`.
+
+## Scripts
+
+Set `DATABASE_URL` to a Postgres DSN and run:
+
+- `python scripts/backfill_gurus.py` – initialize schema + deeper filing history backfill
+- `python scripts/update_gurus.py` – incremental update for latest 13F filings
+- `python scripts/compute_changes.py` – compute and persist QoQ changes
+
+## Notes
+
+- Legacy Form 4 parsing code is retained but broad ingestion is disabled unless
+  `ENABLE_FORM4_INGESTION=1` is explicitly set.
