@@ -131,22 +131,76 @@ def init_db() -> None:
                 FOREIGN KEY (previous_filing_id) REFERENCES guru_filings(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS companies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cik TEXT,
+                ticker TEXT,
+                cusip TEXT,
+                company_name TEXT NOT NULL,
+                sic_code TEXT,
+                sic_description TEXT,
+                sector_bucket TEXT,
+                industry_bucket TEXT,
+                source TEXT NOT NULL DEFAULT 'sec',
+                needs_classification INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (company_name, cusip)
+            );
+
+            CREATE TABLE IF NOT EXISTS sic_sector_map (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sic_code TEXT,
+                sic_description TEXT,
+                sector_bucket TEXT NOT NULL,
+                industry_bucket TEXT,
+                notes TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_guru_filings_guru_id ON guru_filings(guru_id);
             CREATE INDEX IF NOT EXISTS idx_guru_filings_report_period ON guru_filings(guru_id, report_period DESC);
             CREATE INDEX IF NOT EXISTS idx_guru_holdings_filing_id ON guru_holdings(filing_id);
             CREATE INDEX IF NOT EXISTS idx_guru_holdings_cusip ON guru_holdings(cusip);
             CREATE INDEX IF NOT EXISTS idx_guru_changes_guru_id ON guru_changes(guru_id);
+            CREATE INDEX IF NOT EXISTS idx_companies_cusip ON companies(cusip);
+            CREATE INDEX IF NOT EXISTS idx_companies_sector_bucket ON companies(sector_bucket);
+            CREATE INDEX IF NOT EXISTS idx_sic_sector_map_code ON sic_sector_map(sic_code);
             """
         )
 
-        columns = {
-            row['name']
-            for row in conn.execute("PRAGMA table_info('guru_filings')").fetchall()
-        }
-        if 'created_at' not in columns:
-            conn.execute(
-                "ALTER TABLE guru_filings "
-                "ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-            )
+        _ensure_column(conn, 'guru_filings', 'created_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+        _ensure_column(conn, 'companies', 'needs_classification', "INTEGER NOT NULL DEFAULT 0")
+        _seed_sic_sector_map(conn)
 
         conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl_type: str) -> None:
+    columns = {row['name'] for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+    if column not in columns:
+        conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {ddl_type}')
+
+
+def _seed_sic_sector_map(conn: sqlite3.Connection) -> None:
+    from tracker.gurus.classification import DEFAULT_SIC_RULES
+
+    existing = conn.execute('SELECT COUNT(1) AS count FROM sic_sector_map').fetchone()
+    if existing and int(existing['count']) > 0:
+        return
+
+    conn.executemany(
+        """
+        INSERT INTO sic_sector_map (sic_code, sic_description, sector_bucket, industry_bucket, notes)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                row.get('sic_code'),
+                row.get('sic_description'),
+                row['sector_bucket'],
+                row.get('industry_bucket'),
+                row.get('notes'),
+            )
+            for row in DEFAULT_SIC_RULES
+        ],
+    )

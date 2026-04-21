@@ -353,3 +353,180 @@ class GuruRepository:
             params,
         )
         return [dict(row) for row in rows]
+
+    def get_sic_sector_map(self) -> dict[str, tuple[str, str | None]]:
+        rows = fetch_all(
+            """
+            SELECT sic_code, sector_bucket, industry_bucket
+            FROM sic_sector_map
+            WHERE sic_code IS NOT NULL AND TRIM(sic_code) <> ''
+            """
+        )
+        return {
+            str(row['sic_code']): (str(row['sector_bucket']), row['industry_bucket'])
+            for row in rows
+        }
+
+    def list_distinct_holding_companies(self) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT DISTINCT h.issuer_name, h.cusip
+            FROM guru_holdings h
+            WHERE TRIM(COALESCE(h.issuer_name, '')) <> ''
+            """
+        )
+        return [dict(row) for row in rows]
+
+    def upsert_company(
+        self,
+        *,
+        cik: str | None,
+        ticker: str | None,
+        cusip: str | None,
+        company_name: str,
+        sic_code: str | None,
+        sic_description: str | None,
+        sector_bucket: str | None,
+        industry_bucket: str | None,
+        source: str,
+        needs_classification: bool,
+    ) -> int:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO companies (
+                    cik, ticker, cusip, company_name, sic_code, sic_description,
+                    sector_bucket, industry_bucket, source, needs_classification
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (company_name, cusip)
+                DO UPDATE SET
+                    cik = excluded.cik,
+                    ticker = COALESCE(excluded.ticker, companies.ticker),
+                    sic_code = excluded.sic_code,
+                    sic_description = excluded.sic_description,
+                    sector_bucket = excluded.sector_bucket,
+                    industry_bucket = excluded.industry_bucket,
+                    source = excluded.source,
+                    needs_classification = excluded.needs_classification,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    cik,
+                    ticker,
+                    cusip,
+                    company_name,
+                    sic_code,
+                    sic_description,
+                    sector_bucket,
+                    industry_bucket,
+                    source,
+                    1 if needs_classification else 0,
+                ),
+            )
+            row = conn.execute(
+                'SELECT id FROM companies WHERE company_name = ? AND ((cusip = ?) OR (cusip IS NULL AND ? IS NULL))',
+                (company_name, cusip, cusip),
+            ).fetchone()
+            conn.commit()
+        return int(row['id'])
+
+    def get_unmapped_companies(self, limit: int = 200) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT *
+            FROM companies
+            WHERE needs_classification = 1 OR sector_bucket IS NULL
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in rows]
+
+    def get_sector_change_counts(self, change_type: str) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT c.sector_bucket, COUNT(1) AS positions_count
+            FROM guru_changes gc
+            JOIN companies c
+              ON (
+                (gc.cusip IS NOT NULL AND gc.cusip <> '' AND c.cusip = gc.cusip)
+                OR (LOWER(TRIM(c.company_name)) = LOWER(TRIM(gc.issuer_name)))
+              )
+            WHERE gc.change_type = ? AND c.sector_bucket IS NOT NULL
+            GROUP BY c.sector_bucket
+            ORDER BY positions_count DESC
+            """,
+            (change_type,),
+        )
+        return [dict(row) for row in rows]
+
+    def get_sector_net_movement(self) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT c.sector_bucket,
+                   SUM(CASE WHEN gc.change_type IN ('NEW', 'ADD') THEN 1 ELSE 0 END)
+                 - SUM(CASE WHEN gc.change_type IN ('EXIT', 'REDUCE') THEN 1 ELSE 0 END)
+                   AS net_movement
+            FROM guru_changes gc
+            JOIN companies c
+              ON (
+                (gc.cusip IS NOT NULL AND gc.cusip <> '' AND c.cusip = gc.cusip)
+                OR (LOWER(TRIM(c.company_name)) = LOWER(TRIM(gc.issuer_name)))
+              )
+            WHERE c.sector_bucket IS NOT NULL
+            GROUP BY c.sector_bucket
+            ORDER BY net_movement DESC
+            """
+        )
+        return [dict(row) for row in rows]
+
+    def get_top_sectors_by_guru(self, guru_id: int, limit: int = 10) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT c.sector_bucket, COUNT(1) AS position_count
+            FROM guru_holdings h
+            JOIN guru_filings f ON f.id = h.filing_id
+            JOIN companies c
+              ON (
+                (h.cusip IS NOT NULL AND h.cusip <> '' AND c.cusip = h.cusip)
+                OR (LOWER(TRIM(c.company_name)) = LOWER(TRIM(h.issuer_name)))
+              )
+            WHERE f.guru_id = ?
+              AND f.id = (
+                SELECT id FROM guru_filings gf
+                WHERE gf.guru_id = f.guru_id
+                  AND gf.fetch_status = 'completed'
+                  AND gf.parse_status = 'completed'
+                ORDER BY gf.report_period DESC, gf.filing_date DESC
+                LIMIT 1
+              )
+              AND c.sector_bucket IS NOT NULL
+            GROUP BY c.sector_bucket
+            ORDER BY position_count DESC
+            LIMIT ?
+            """,
+            (guru_id, limit),
+        )
+        return [dict(row) for row in rows]
+
+    def get_gurus_buying_sector(self, sector_bucket: str, limit: int = 200) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT DISTINCT g.id AS guru_id, g.guru_name, g.manager_name, c.sector_bucket
+            FROM guru_changes gc
+            JOIN tracked_gurus g ON g.id = gc.guru_id
+            JOIN companies c
+              ON (
+                (gc.cusip IS NOT NULL AND gc.cusip <> '' AND c.cusip = gc.cusip)
+                OR (LOWER(TRIM(c.company_name)) = LOWER(TRIM(gc.issuer_name)))
+              )
+            WHERE gc.change_type IN ('NEW', 'ADD')
+              AND c.sector_bucket = ?
+            ORDER BY g.guru_name
+            LIMIT ?
+            """,
+            (sector_bucket, limit),
+        )
+        return [dict(row) for row in rows]
