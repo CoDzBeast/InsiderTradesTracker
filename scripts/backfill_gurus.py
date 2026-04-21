@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import os
-from pathlib import Path
 
 from tracker.gurus import BackfillOptions, SEC13FIngestion, ingest_guru_filings, init_schema
 
@@ -21,6 +25,12 @@ def main() -> None:
     )
     parser.add_argument('--resume', action='store_true', help='Resume mode: skip completed filings.')
     parser.add_argument(
+        '--max-filing-retries',
+        type=int,
+        default=int(os.environ.get('SEC_MAX_RETRIES_PER_FILING', '5')),
+        help='Max retry attempts for each filing before skipping.',
+    )
+    parser.add_argument(
         '--config-path',
         default='config/tracked_gurus.json',
         help='Path to tracked gurus JSON config (default: config/tracked_gurus.json).',
@@ -28,11 +38,14 @@ def main() -> None:
     args = parser.parse_args()
 
     per_guru_limit = 1 if args.latest_only else max(1, args.quarters)
+    effective_limit = args.limit_gurus or int(os.environ.get('SEC_GURU_BATCH_SIZE', '20'))
+
     print('[backfill] Starting guru backfill run')
     print(f'[backfill] Config path: {args.config_path}')
     print(f'[backfill] Resume mode: {args.resume}')
-    print(f'[backfill] Guru limit: {args.limit_gurus or int(os.environ.get("SEC_GURU_BATCH_SIZE", "20"))}')
+    print(f'[backfill] Guru limit: {effective_limit}')
     print(f'[backfill] Quarters per guru: {per_guru_limit}')
+    print(f'[backfill] Max retries per filing: {args.max_filing_retries}')
 
     init_schema()
     pipeline = SEC13FIngestion(config_path=Path(args.config_path))
@@ -41,8 +54,9 @@ def main() -> None:
         pipeline=pipeline,
         options=BackfillOptions(
             per_guru_limit=per_guru_limit,
-            limit_gurus=args.limit_gurus or int(os.environ.get('SEC_GURU_BATCH_SIZE', '20')),
+            limit_gurus=effective_limit,
             resume=args.resume,
+            max_retries_per_filing=max(1, args.max_filing_retries),
         ),
     )
     print(f'[backfill] Completed guru backfill run: {summary}')

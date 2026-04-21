@@ -40,6 +40,7 @@ class BackfillOptions:
     per_guru_limit: int = 2
     limit_gurus: int | None = None
     resume: bool = True
+    max_retries_per_filing: int = 5
 
 
 class SEC13FIngestion:
@@ -60,7 +61,19 @@ class SEC13FIngestion:
 
     def load_tracked_gurus(self) -> list[dict[str, str]]:
         with self.config_path.open(mode='r', encoding='utf-8') as handle:
-            return json.load(handle)
+            gurus = json.load(handle)
+
+        normalized: list[dict[str, str]] = []
+        for row in gurus:
+            normalized.append(
+                {
+                    'guru_name': row.get('guru_name', '').strip(),
+                    'manager_name': row.get('manager_name', '').strip(),
+                    'cik': (row.get('cik') or '').strip(),
+                    'enabled': bool(row.get('enabled', True)),
+                }
+            )
+        return normalized
 
     def resolve_cik(self, manager_name: str) -> str | None:
         """Resolve manager CIK via SEC company search endpoint."""
@@ -197,16 +210,23 @@ def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: Backfill
     }
 
     gurus = pipeline.load_tracked_gurus()
+    gurus = [g for g in gurus if g.get('enabled', True)]
     if backfill_options.limit_gurus is not None:
         gurus = gurus[:backfill_options.limit_gurus]
-    logger.info('Loaded %s tracked gurus from %s', len(gurus), pipeline.config_path)
+    logger.info('Loaded %s enabled tracked gurus from %s', len(gurus), pipeline.config_path)
 
     for guru_index, guru in enumerate(gurus, start=1):
         guru_name = guru['guru_name']
         manager_name = guru['manager_name']
         logger.info('Processing guru %s/%s: %s (%s)', guru_index, len(gurus), guru_name, manager_name)
 
-        guru_id = repo.upsert_guru(guru_name=guru_name, manager_name=manager_name)
+        configured_cik = str(guru.get('cik') or '').zfill(10) if guru.get('cik') else None
+        guru_id = repo.upsert_guru(
+            guru_name=guru_name,
+            manager_name=manager_name,
+            cik=configured_cik,
+            enabled=True,
+        )
 
         cik = repo.get_guru_cik(guru_id)
         if cik is None:
@@ -249,6 +269,18 @@ def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: Backfill
                 summary['skipped'] += 1
                 continue
 
+            if progress is not None and progress['retry_count'] >= backfill_options.max_retries_per_filing:
+                logger.warning(
+                    'Skipping filing %s due to max retries reached (%s)',
+                    filing.accession_number,
+                    backfill_options.max_retries_per_filing,
+                )
+                summary['skipped'] += 1
+                continue
+
+            index_cache_key = f'filings/{cik}/{filing.accession_number.replace("-", "")}/index.json'
+            xml_cache_key = f'filings/{cik}/{filing.accession_number.replace("-", "")}/informationTable.xml'
+
             try:
                 filing_id, inserted = repo.upsert_filing(guru_id, filing)
                 if inserted:
@@ -259,8 +291,8 @@ def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: Backfill
                     fetch_status='in_progress',
                     parse_status='pending',
                     error_message=None,
-                    raw_index_path=filing.index_url,
-                    raw_xml_path=filing.information_table_url,
+                    raw_index_path=pipeline.client.cache_path_for(index_cache_key),
+                    raw_xml_path=pipeline.client.cache_path_for(xml_cache_key),
                 )
 
                 holdings = pipeline.parse_information_table(cik, filing.accession_number, filing.information_table_url)
@@ -274,8 +306,8 @@ def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: Backfill
                     fetch_status='completed',
                     parse_status='completed',
                     error_message=None,
-                    raw_index_path=filing.index_url,
-                    raw_xml_path=filing.information_table_url,
+                    raw_index_path=pipeline.client.cache_path_for(index_cache_key),
+                    raw_xml_path=pipeline.client.cache_path_for(xml_cache_key),
                 )
             except Exception as error:  # pylint: disable=broad-except
                 summary['failures'] += 1
@@ -285,8 +317,8 @@ def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: Backfill
                     fetch_status='failed',
                     parse_status='failed',
                     error_message=str(error),
-                    raw_index_path=filing.index_url,
-                    raw_xml_path=filing.information_table_url,
+                    raw_index_path=pipeline.client.cache_path_for(index_cache_key),
+                    raw_xml_path=pipeline.client.cache_path_for(xml_cache_key),
                 )
                 logger.exception('Failed filing for %s (%s): %s', guru_name, filing.accession_number, error)
 

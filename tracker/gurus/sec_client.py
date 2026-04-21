@@ -74,6 +74,11 @@ class SECRequestClient:
             self._write_cache(cache_key, response.content)
         return response.content
 
+    def cache_path_for(self, cache_key: str | None) -> str | None:
+        if not cache_key:
+            return None
+        return str(self.cache_dir.joinpath(cache_key))
+
     def _get_with_retries(self, url: str) -> requests.Response:
         self._throttle()
         response: requests.Response | None = None
@@ -142,4 +147,5 @@ class SECRequestClient:
     def _write_cache(self, cache_key: str, content: bytes) -> None:
         path = self.cache_dir.joinpath(cache_key)
         path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info('SEC cache write: %s', path)
         path.write_bytes(content)

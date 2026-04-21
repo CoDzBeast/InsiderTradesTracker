@@ -14,16 +14,18 @@ class GuruRepository:
     def __init__(self, connection=None):
         self.connection = connection
 
-    def upsert_guru(self, guru_name: str, manager_name: str) -> int:
+    def upsert_guru(self, guru_name: str, manager_name: str, cik: str | None = None, enabled: bool = True) -> int:
         with get_conn() as conn:
             conn.execute(
                 """
-                INSERT INTO tracked_gurus (guru_name, manager_name, enabled)
-                VALUES (?, ?, 1)
+                INSERT INTO tracked_gurus (guru_name, manager_name, cik, enabled)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT (manager_name)
-                DO UPDATE SET guru_name = excluded.guru_name
+                DO UPDATE SET guru_name = excluded.guru_name,
+                              cik = COALESCE(NULLIF(excluded.cik, ''), tracked_gurus.cik),
+                              enabled = excluded.enabled
                 """,
-                (guru_name, manager_name),
+                (guru_name, manager_name, cik or None, 1 if enabled else 0),
             )
             row = conn.execute(
                 'SELECT id FROM tracked_gurus WHERE manager_name = ?',
@@ -83,6 +85,7 @@ class GuruRepository:
         raw_index_path: str | None,
         raw_xml_path: str | None,
     ) -> None:
+        increment_retry = 0 if fetch_status == 'completed' and parse_status == 'completed' else 1
         with get_conn() as conn:
             conn.execute(
                 """
@@ -91,8 +94,8 @@ class GuruRepository:
                     parse_status = ?,
                     last_attempt_at = CURRENT_TIMESTAMP,
                     retry_count = CASE
-                        WHEN ? = 'completed' AND ? = 'completed' THEN retry_count
-                        ELSE retry_count + 1
+                        WHEN ? = 1 THEN retry_count + 1
+                        ELSE retry_count
                     END,
                     error_message = ?,
                     raw_index_path = COALESCE(?, raw_index_path),
@@ -102,8 +105,7 @@ class GuruRepository:
                 (
                     fetch_status,
                     parse_status,
-                    fetch_status,
-                    parse_status,
+                    increment_retry,
                     error_message,
                     raw_index_path,
                     raw_xml_path,
@@ -146,7 +148,7 @@ class GuruRepository:
             """
             SELECT id, accession_number
             FROM guru_filings
-            WHERE guru_id = ?
+            WHERE guru_id = ? AND fetch_status = 'completed' AND parse_status = 'completed'
             ORDER BY report_period DESC, filing_date DESC
             LIMIT 2
             """,
@@ -217,7 +219,7 @@ class GuruRepository:
     def get_filing_progress(self, guru_id: int, accession_number: str) -> dict | None:
         row = fetch_one(
             """
-            SELECT fetch_status, parse_status, retry_count
+            SELECT id, fetch_status, parse_status, retry_count, last_attempt_at, error_message
             FROM guru_filings
             WHERE guru_id = ? AND accession_number = ?
             """,
@@ -226,7 +228,128 @@ class GuruRepository:
         if row is None:
             return None
         return {
+            'id': int(row['id']),
             'fetch_status': row['fetch_status'],
             'parse_status': row['parse_status'],
-            'retry_count': row['retry_count'],
+            'retry_count': int(row['retry_count']),
+            'last_attempt_at': row['last_attempt_at'],
+            'error_message': row['error_message'],
         }
+
+    # Query helpers for future frontend
+    def get_all_tracked_gurus(self, enabled_only: bool = True) -> list[dict]:
+        query = (
+            'SELECT id, guru_name, manager_name, cik, enabled, created_at '
+            'FROM tracked_gurus '
+            + ('WHERE enabled = 1 ' if enabled_only else '')
+            + 'ORDER BY guru_name'
+        )
+        rows = fetch_all(query)
+        return [dict(row) for row in rows]
+
+    def get_latest_filings_for_guru(self, guru_id: int, limit: int = 8) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT id, guru_id, accession_number, filing_date, report_period, form_type,
+                   fetch_status, parse_status, retry_count, error_message, raw_index_path, raw_xml_path
+            FROM guru_filings
+            WHERE guru_id = ?
+            ORDER BY report_period DESC, filing_date DESC
+            LIMIT ?
+            """,
+            (guru_id, limit),
+        )
+        return [dict(row) for row in rows]
+
+    def get_latest_holdings_for_guru(self, guru_id: int, limit: int = 200) -> list[dict]:
+        latest = fetch_one(
+            """
+            SELECT id
+            FROM guru_filings
+            WHERE guru_id = ? AND fetch_status = 'completed' AND parse_status = 'completed'
+            ORDER BY report_period DESC, filing_date DESC
+            LIMIT 1
+            """,
+            (guru_id,),
+        )
+        if latest is None:
+            return []
+
+        rows = fetch_all(
+            """
+            SELECT h.*, f.report_period, f.filing_date
+            FROM guru_holdings h
+            JOIN guru_filings f ON f.id = h.filing_id
+            WHERE h.filing_id = ?
+            ORDER BY COALESCE(h.value_usd, 0) DESC
+            LIMIT ?
+            """,
+            (int(latest['id']), limit),
+        )
+        return [dict(row) for row in rows]
+
+    def get_changes_for_guru(self, guru_id: int, limit: int = 200) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT c.*, cf.report_period AS current_report_period, pf.report_period AS previous_report_period
+            FROM guru_changes c
+            JOIN guru_filings cf ON c.current_filing_id = cf.id
+            JOIN guru_filings pf ON c.previous_filing_id = pf.id
+            WHERE c.guru_id = ?
+            ORDER BY ABS(COALESCE(c.delta_shares, 0)) DESC
+            LIMIT ?
+            """,
+            (guru_id, limit),
+        )
+        return [dict(row) for row in rows]
+
+    def get_biggest_changes_across_gurus(self, change_type: str, limit: int = 50) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT c.*, g.guru_name, g.manager_name
+            FROM guru_changes c
+            JOIN tracked_gurus g ON c.guru_id = g.id
+            WHERE c.change_type = ?
+            ORDER BY ABS(COALESCE(c.delta_shares, 0)) DESC
+            LIMIT ?
+            """,
+            (change_type, limit),
+        )
+        return [dict(row) for row in rows]
+
+    def find_gurus_holding(self, issuer_name: str | None = None, cusip: str | None = None) -> list[dict]:
+        if not issuer_name and not cusip:
+            return []
+
+        clauses = []
+        params: list[str] = []
+        if issuer_name:
+            clauses.append('LOWER(h.issuer_name) LIKE ?')
+            params.append(f'%{issuer_name.lower()}%')
+        if cusip:
+            clauses.append('h.cusip = ?')
+            params.append(cusip)
+
+        where_clause = ' OR '.join(clauses)
+        rows = fetch_all(
+            f"""
+            SELECT DISTINCT g.id AS guru_id, g.guru_name, g.manager_name, g.cik,
+                   h.issuer_name, h.cusip, h.shares, h.value_usd,
+                   f.report_period, f.filing_date
+            FROM guru_holdings h
+            JOIN guru_filings f ON f.id = h.filing_id
+            JOIN tracked_gurus g ON g.id = f.guru_id
+            WHERE f.id IN (
+                SELECT id FROM guru_filings gf
+                WHERE gf.guru_id = f.guru_id
+                  AND gf.fetch_status = 'completed'
+                  AND gf.parse_status = 'completed'
+                ORDER BY gf.report_period DESC, gf.filing_date DESC
+                LIMIT 1
+            )
+              AND ({where_clause})
+            ORDER BY g.guru_name
+            """,
+            params,
+        )
+        return [dict(row) for row in rows]
