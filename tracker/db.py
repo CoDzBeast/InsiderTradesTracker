@@ -105,12 +105,19 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 filing_id INTEGER NOT NULL,
                 issuer_name TEXT NOT NULL,
+                raw_issuer_name TEXT,
+                normalized_issuer_name TEXT,
                 cusip TEXT,
                 shares NUMERIC,
                 value_usd NUMERIC,
                 put_call TEXT,
                 discretion TEXT,
+                company_id INTEGER,
+                match_status TEXT NOT NULL DEFAULT 'unmapped',
+                match_confidence REAL,
+                match_notes TEXT,
                 FOREIGN KEY (filing_id) REFERENCES guru_filings(id) ON DELETE CASCADE,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL,
                 UNIQUE (filing_id, issuer_name, cusip)
             );
 
@@ -137,15 +144,30 @@ def init_db() -> None:
                 ticker TEXT,
                 cusip TEXT,
                 company_name TEXT NOT NULL,
+                normalized_company_name TEXT,
                 sic_code TEXT,
                 sic_description TEXT,
                 sector_bucket TEXT,
                 industry_bucket TEXT,
+                classification_status TEXT NOT NULL DEFAULT 'unmapped',
+                needs_review INTEGER NOT NULL DEFAULT 0,
                 source TEXT NOT NULL DEFAULT 'sec',
                 needs_classification INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE (company_name, cusip)
+            );
+
+            CREATE TABLE IF NOT EXISTS company_identity_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                raw_issuer_name TEXT,
+                normalized_issuer_name TEXT,
+                cusip TEXT,
+                ticker TEXT,
+                forced_company_id INTEGER NOT NULL,
+                notes TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (forced_company_id) REFERENCES companies(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS sic_sector_map (
@@ -161,15 +183,40 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_guru_filings_report_period ON guru_filings(guru_id, report_period DESC);
             CREATE INDEX IF NOT EXISTS idx_guru_holdings_filing_id ON guru_holdings(filing_id);
             CREATE INDEX IF NOT EXISTS idx_guru_holdings_cusip ON guru_holdings(cusip);
+            CREATE INDEX IF NOT EXISTS idx_guru_holdings_company_id ON guru_holdings(company_id);
+            CREATE INDEX IF NOT EXISTS idx_guru_holdings_match_status ON guru_holdings(match_status);
             CREATE INDEX IF NOT EXISTS idx_guru_changes_guru_id ON guru_changes(guru_id);
             CREATE INDEX IF NOT EXISTS idx_companies_cusip ON companies(cusip);
+            CREATE INDEX IF NOT EXISTS idx_companies_normalized_name ON companies(normalized_company_name);
             CREATE INDEX IF NOT EXISTS idx_companies_sector_bucket ON companies(sector_bucket);
+            CREATE UNIQUE INDEX IF NOT EXISTS uniq_companies_name_cusip_nonempty
+                ON companies(normalized_company_name, cusip)
+                WHERE normalized_company_name IS NOT NULL AND TRIM(normalized_company_name) <> ''
+                  AND cusip IS NOT NULL AND TRIM(cusip) <> '';
+            CREATE UNIQUE INDEX IF NOT EXISTS uniq_companies_name_no_cusip
+                ON companies(normalized_company_name)
+                WHERE normalized_company_name IS NOT NULL AND TRIM(normalized_company_name) <> ''
+                  AND (cusip IS NULL OR TRIM(cusip) = '');
             CREATE INDEX IF NOT EXISTS idx_sic_sector_map_code ON sic_sector_map(sic_code);
+            CREATE INDEX IF NOT EXISTS idx_company_identity_override_lookup
+                ON company_identity_overrides(normalized_issuer_name, cusip, ticker);
             """
         )
 
         _ensure_column(conn, 'guru_filings', 'created_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
         _ensure_column(conn, 'companies', 'needs_classification', "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, 'companies', 'normalized_company_name', "TEXT")
+        _ensure_column(conn, 'companies', 'classification_status', "TEXT NOT NULL DEFAULT 'unmapped'")
+        _ensure_column(conn, 'companies', 'needs_review', "INTEGER NOT NULL DEFAULT 0")
+
+        _ensure_column(conn, 'guru_holdings', 'raw_issuer_name', "TEXT")
+        _ensure_column(conn, 'guru_holdings', 'normalized_issuer_name', "TEXT")
+        _ensure_column(conn, 'guru_holdings', 'company_id', "INTEGER REFERENCES companies(id) ON DELETE SET NULL")
+        _ensure_column(conn, 'guru_holdings', 'match_status', "TEXT NOT NULL DEFAULT 'unmapped'")
+        _ensure_column(conn, 'guru_holdings', 'match_confidence', "REAL")
+        _ensure_column(conn, 'guru_holdings', 'match_notes', "TEXT")
+
+        _backfill_identity_columns(conn)
         _seed_sic_sector_map(conn)
 
         conn.commit()
@@ -203,4 +250,14 @@ def _seed_sic_sector_map(conn: sqlite3.Connection) -> None:
             )
             for row in DEFAULT_SIC_RULES
         ],
+    )
+
+
+def _backfill_identity_columns(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        UPDATE guru_holdings
+        SET raw_issuer_name = COALESCE(raw_issuer_name, issuer_name)
+        WHERE raw_issuer_name IS NULL
+        """
     )

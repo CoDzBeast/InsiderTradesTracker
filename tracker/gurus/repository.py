@@ -124,24 +124,48 @@ class GuruRepository:
         if not holdings:
             return
 
+        from tracker.gurus.company_identity import CompanyIdentityService
+
+        identity = CompanyIdentityService(repo=self)
         with get_conn() as conn:
             args = [
-                (filing_id, h.issuer_name, h.cusip, str(h.shares), str(h.value_usd), None, None)
+                (
+                    filing_id,
+                    h.issuer_name,
+                    h.issuer_name,
+                    identity.normalize_name(h.issuer_name),
+                    h.cusip,
+                    str(h.shares),
+                    str(h.value_usd),
+                    None,
+                    None,
+                )
                 for h in holdings
             ]
             conn.executemany(
                 """
-                INSERT INTO guru_holdings (filing_id, issuer_name, cusip, shares, value_usd, put_call, discretion)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO guru_holdings (
+                    filing_id, issuer_name, raw_issuer_name, normalized_issuer_name, cusip,
+                    shares, value_usd, put_call, discretion
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (filing_id, issuer_name, cusip)
                 DO UPDATE SET shares = excluded.shares,
                               value_usd = excluded.value_usd,
+                              raw_issuer_name = COALESCE(guru_holdings.raw_issuer_name, excluded.raw_issuer_name),
+                              normalized_issuer_name = excluded.normalized_issuer_name,
                               put_call = excluded.put_call,
-                              discretion = excluded.discretion
+                              discretion = excluded.discretion,
+                              company_id = NULL,
+                              match_status = 'unmapped',
+                              match_confidence = NULL,
+                              match_notes = NULL
                 """,
                 args,
             )
             conn.commit()
+
+        identity.apply_identity_for_filing(filing_id=filing_id)
 
     def latest_two_filings(self, guru_id: int) -> list[tuple[int, str]]:
         rows = fetch_all(
@@ -384,29 +408,36 @@ class GuruRepository:
         ticker: str | None,
         cusip: str | None,
         company_name: str,
+        normalized_company_name: str | None = None,
         sic_code: str | None,
         sic_description: str | None,
         sector_bucket: str | None,
         industry_bucket: str | None,
         source: str,
         needs_classification: bool,
+        classification_status: str = 'matched',
+        needs_review: bool = False,
     ) -> int:
         with get_conn() as conn:
             conn.execute(
                 """
                 INSERT INTO companies (
                     cik, ticker, cusip, company_name, sic_code, sic_description,
-                    sector_bucket, industry_bucket, source, needs_classification
+                    normalized_company_name, sector_bucket, industry_bucket,
+                    classification_status, needs_review, source, needs_classification
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (company_name, cusip)
                 DO UPDATE SET
                     cik = excluded.cik,
                     ticker = COALESCE(excluded.ticker, companies.ticker),
                     sic_code = excluded.sic_code,
                     sic_description = excluded.sic_description,
+                    normalized_company_name = COALESCE(excluded.normalized_company_name, companies.normalized_company_name),
                     sector_bucket = excluded.sector_bucket,
                     industry_bucket = excluded.industry_bucket,
+                    classification_status = excluded.classification_status,
+                    needs_review = excluded.needs_review,
                     source = excluded.source,
                     needs_classification = excluded.needs_classification,
                     updated_at = CURRENT_TIMESTAMP
@@ -418,8 +449,11 @@ class GuruRepository:
                     company_name,
                     sic_code,
                     sic_description,
+                    normalized_company_name,
                     sector_bucket,
                     industry_bucket,
+                    classification_status,
+                    1 if needs_review else 0,
                     source,
                     1 if needs_classification else 0,
                 ),
@@ -430,6 +464,113 @@ class GuruRepository:
             ).fetchone()
             conn.commit()
         return int(row['id'])
+
+    def ensure_canonical_company(self, **kwargs) -> int:
+        return self.upsert_company(**kwargs)
+
+    def get_holdings_for_identity(self, filing_id: int) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT h.id, h.issuer_name, h.raw_issuer_name, h.cusip, c.ticker
+            FROM guru_holdings h
+            LEFT JOIN companies c ON c.id = h.company_id
+            WHERE h.filing_id = ?
+            """,
+            (filing_id,),
+        )
+        return [dict(row) for row in rows]
+
+    def update_holding_company_match(
+        self,
+        *,
+        holding_id: int,
+        company_id: int | None,
+        normalized_issuer_name: str,
+        match_status: str,
+        match_confidence: float | None,
+        match_notes: str | None,
+    ) -> None:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE guru_holdings
+                SET company_id = ?,
+                    normalized_issuer_name = ?,
+                    match_status = ?,
+                    match_confidence = ?,
+                    match_notes = ?,
+                    raw_issuer_name = COALESCE(raw_issuer_name, issuer_name)
+                WHERE id = ?
+                """,
+                (company_id, normalized_issuer_name, match_status, match_confidence, match_notes, holding_id),
+            )
+            conn.commit()
+
+    def find_company_by_cusip(self, cusip: str):
+        return fetch_one(
+            "SELECT * FROM companies WHERE cusip = ? ORDER BY updated_at DESC LIMIT 1",
+            (cusip,),
+        )
+
+    def find_company_by_normalized_name(self, normalized_name: str):
+        return fetch_one(
+            "SELECT * FROM companies WHERE normalized_company_name = ? ORDER BY updated_at DESC LIMIT 1",
+            (normalized_name,),
+        )
+
+    def find_company_by_ticker(self, ticker: str):
+        return fetch_one(
+            "SELECT * FROM companies WHERE UPPER(COALESCE(ticker, '')) = ? ORDER BY updated_at DESC LIMIT 1",
+            (ticker.upper(),),
+        )
+
+    def find_company_name_like(self, normalized_name: str):
+        return fetch_one(
+            """
+            SELECT *
+            FROM companies
+            WHERE normalized_company_name LIKE ? OR ? LIKE normalized_company_name || ' %'
+            ORDER BY LENGTH(normalized_company_name) DESC
+            LIMIT 1
+            """,
+            (f'{normalized_name} %', normalized_name),
+        )
+
+    def find_identity_override(
+        self,
+        *,
+        raw_issuer_name: str | None,
+        normalized_issuer_name: str,
+        cusip: str | None,
+        ticker: str | None,
+    ):
+        return fetch_one(
+            """
+            SELECT *
+            FROM company_identity_overrides
+            WHERE (raw_issuer_name IS NOT NULL AND LOWER(raw_issuer_name) = LOWER(?))
+               OR (normalized_issuer_name IS NOT NULL AND normalized_issuer_name = ?)
+               OR (cusip IS NOT NULL AND cusip <> '' AND cusip = ?)
+               OR (ticker IS NOT NULL AND ticker <> '' AND UPPER(ticker) = UPPER(?))
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (raw_issuer_name, normalized_issuer_name, cusip, ticker),
+        )
+
+    def mark_company_identity_status(self, *, company_id: int, classification_status: str, needs_review: bool) -> None:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE companies
+                SET classification_status = ?,
+                    needs_review = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (classification_status, 1 if needs_review else 0, company_id),
+            )
+            conn.commit()
 
     def get_unmapped_companies(self, limit: int = 200) -> list[dict]:
         rows = fetch_all(
@@ -449,11 +590,11 @@ class GuruRepository:
             """
             SELECT c.sector_bucket, COUNT(1) AS positions_count
             FROM guru_changes gc
-            JOIN companies c
-              ON (
-                (gc.cusip IS NOT NULL AND gc.cusip <> '' AND c.cusip = gc.cusip)
-                OR (LOWER(TRIM(c.company_name)) = LOWER(TRIM(gc.issuer_name)))
-              )
+            JOIN guru_filings f ON f.id = gc.current_filing_id
+            JOIN guru_holdings h ON h.filing_id = f.id
+                AND h.issuer_name = gc.issuer_name
+                AND COALESCE(h.cusip, '') = COALESCE(gc.cusip, '')
+            JOIN companies c ON c.id = h.company_id
             WHERE gc.change_type = ? AND c.sector_bucket IS NOT NULL
             GROUP BY c.sector_bucket
             ORDER BY positions_count DESC
@@ -470,11 +611,11 @@ class GuruRepository:
                  - SUM(CASE WHEN gc.change_type IN ('EXIT', 'REDUCE') THEN 1 ELSE 0 END)
                    AS net_movement
             FROM guru_changes gc
-            JOIN companies c
-              ON (
-                (gc.cusip IS NOT NULL AND gc.cusip <> '' AND c.cusip = gc.cusip)
-                OR (LOWER(TRIM(c.company_name)) = LOWER(TRIM(gc.issuer_name)))
-              )
+            JOIN guru_filings f ON f.id = gc.current_filing_id
+            JOIN guru_holdings h ON h.filing_id = f.id
+                AND h.issuer_name = gc.issuer_name
+                AND COALESCE(h.cusip, '') = COALESCE(gc.cusip, '')
+            JOIN companies c ON c.id = h.company_id
             WHERE c.sector_bucket IS NOT NULL
             GROUP BY c.sector_bucket
             ORDER BY net_movement DESC
@@ -488,11 +629,7 @@ class GuruRepository:
             SELECT c.sector_bucket, COUNT(1) AS position_count
             FROM guru_holdings h
             JOIN guru_filings f ON f.id = h.filing_id
-            JOIN companies c
-              ON (
-                (h.cusip IS NOT NULL AND h.cusip <> '' AND c.cusip = h.cusip)
-                OR (LOWER(TRIM(c.company_name)) = LOWER(TRIM(h.issuer_name)))
-              )
+            JOIN companies c ON c.id = h.company_id
             WHERE f.guru_id = ?
               AND f.id = (
                 SELECT id FROM guru_filings gf
@@ -517,16 +654,99 @@ class GuruRepository:
             SELECT DISTINCT g.id AS guru_id, g.guru_name, g.manager_name, c.sector_bucket
             FROM guru_changes gc
             JOIN tracked_gurus g ON g.id = gc.guru_id
-            JOIN companies c
-              ON (
-                (gc.cusip IS NOT NULL AND gc.cusip <> '' AND c.cusip = gc.cusip)
-                OR (LOWER(TRIM(c.company_name)) = LOWER(TRIM(gc.issuer_name)))
-              )
+            JOIN guru_filings f ON f.id = gc.current_filing_id
+            JOIN guru_holdings h ON h.filing_id = f.id
+                AND h.issuer_name = gc.issuer_name
+                AND COALESCE(h.cusip, '') = COALESCE(gc.cusip, '')
+            JOIN companies c ON c.id = h.company_id
             WHERE gc.change_type IN ('NEW', 'ADD')
               AND c.sector_bucket = ?
             ORDER BY g.guru_name
             LIMIT ?
             """,
             (sector_bucket, limit),
+        )
+        return [dict(row) for row in rows]
+
+    def get_canonical_company_by_holding(self, holding_id: int) -> dict | None:
+        row = fetch_one(
+            """
+            SELECT c.*
+            FROM guru_holdings h
+            JOIN companies c ON c.id = h.company_id
+            WHERE h.id = ?
+            """,
+            (holding_id,),
+        )
+        return dict(row) if row else None
+
+    def get_holdings_by_company(self, company_id: int, limit: int = 500) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT h.*, f.guru_id, f.report_period, f.filing_date
+            FROM guru_holdings h
+            JOIN guru_filings f ON f.id = h.filing_id
+            WHERE h.company_id = ?
+            ORDER BY f.report_period DESC, f.filing_date DESC
+            LIMIT ?
+            """,
+            (company_id, limit),
+        )
+        return [dict(row) for row in rows]
+
+    def get_unresolved_holdings(self, limit: int | None = 500) -> list[dict]:
+        query = """
+            SELECT h.*, f.guru_id, f.report_period
+            FROM guru_holdings h
+            JOIN guru_filings f ON f.id = h.filing_id
+            WHERE h.company_id IS NULL
+               OR h.match_status IN ('unmapped')
+               OR COALESCE(h.match_confidence, 0) < 0.6
+            ORDER BY f.report_period DESC
+        """
+        params: tuple = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        rows = fetch_all(query, params)
+        return [dict(row) for row in rows]
+
+    def get_companies_needing_review(self, limit: int = 200) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT *
+            FROM companies
+            WHERE needs_review = 1 OR classification_status IN ('inferred', 'unmapped')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in rows]
+
+    def get_gurus_holding_company(self, company_id: int) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT DISTINCT g.id AS guru_id, g.guru_name, g.manager_name
+            FROM guru_holdings h
+            JOIN guru_filings f ON f.id = h.filing_id
+            JOIN tracked_gurus g ON g.id = f.guru_id
+            WHERE h.company_id = ?
+            ORDER BY g.guru_name
+            """,
+            (company_id,),
+        )
+        return [dict(row) for row in rows]
+
+    def get_sector_counts_from_canonical_companies(self) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT c.sector_bucket, COUNT(1) AS holdings_count
+            FROM guru_holdings h
+            JOIN companies c ON c.id = h.company_id
+            WHERE c.sector_bucket IS NOT NULL
+            GROUP BY c.sector_bucket
+            ORDER BY holdings_count DESC
+            """
         )
         return [dict(row) for row in rows]

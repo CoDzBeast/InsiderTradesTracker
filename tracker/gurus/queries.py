@@ -55,3 +55,21 @@ class GuruQueryService:
 
     def get_unmapped_companies(self, limit: int = 200) -> list[dict]:
         return self.repo.get_unmapped_companies(limit=limit)
+
+    def get_canonical_company_by_holding(self, holding_id: int) -> dict | None:
+        return self.repo.get_canonical_company_by_holding(holding_id=holding_id)
+
+    def get_holdings_by_company(self, company_id: int, limit: int = 500) -> list[dict]:
+        return self.repo.get_holdings_by_company(company_id=company_id, limit=limit)
+
+    def get_unresolved_holdings(self, limit: int = 500) -> list[dict]:
+        return self.repo.get_unresolved_holdings(limit=limit)
+
+    def get_companies_needing_review(self, limit: int = 200) -> list[dict]:
+        return self.repo.get_companies_needing_review(limit=limit)
+
+    def get_gurus_holding_company(self, company_id: int) -> list[dict]:
+        return self.repo.get_gurus_holding_company(company_id=company_id)
+
+    def get_sector_counts_from_canonical_companies(self) -> list[dict]:
+        return self.repo.get_sector_counts_from_canonical_companies()

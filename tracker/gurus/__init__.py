@@ -10,6 +10,7 @@ __all__ = [
     'SEC13FIngestion',
     'ingest_guru_filings',
     'CompanyEnrichmentService',
+    'CompanyIdentityService',
 ]
 
 
@@ -34,4 +35,8 @@ def __getattr__(name):
         from tracker.gurus.company_enrichment import CompanyEnrichmentService
 
         return CompanyEnrichmentService
+    if name == 'CompanyIdentityService':
+        from tracker.gurus.company_identity import CompanyIdentityService
+
+        return CompanyIdentityService
     raise AttributeError(name)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tracker.gurus.classification import SectorClassifier
+from tracker.gurus.company_identity import CompanyIdentityService
 from tracker.gurus.repository import GuruRepository
 from tracker.gurus.sec_13f import SEC13FIngestion
 
@@ -14,6 +15,7 @@ class CompanyEnrichmentService:
         self.repo = repo or GuruRepository()
         self.pipeline = pipeline or SEC13FIngestion()
         self.classifier = SectorClassifier(exact_sic_map=self.repo.get_sic_sector_map())
+        self.identity = CompanyIdentityService(repo=self.repo)
 
     def run(self) -> dict[str, int]:
         summary = {'companies_processed': 0, 'classified': 0, 'unmapped': 0}
@@ -50,12 +52,15 @@ class CompanyEnrichmentService:
                 ticker=ticker,
                 cusip=cusip,
                 company_name=sec_company_name,
+                normalized_company_name=self.identity.normalize_name(sec_company_name),
                 sic_code=sic_code,
                 sic_description=sic_description,
                 sector_bucket=classified.sector_bucket,
                 industry_bucket=classified.industry_bucket,
                 source='sec_submissions',
                 needs_classification=classified.needs_classification,
+                classification_status='matched' if not classified.needs_classification else 'unmapped',
+                needs_review=classified.needs_classification,
             )
 
             summary['companies_processed'] += 1
