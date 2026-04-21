@@ -26,6 +26,12 @@ else:
 NAME: str | None = _config_dict['name'] if 'name' in _config_dict else None
 EMAIL: str | None = _config_dict['email'] if 'email' in _config_dict else None
 
+# Parse database config
+DATABASE: dict = _config_dict['database'] if 'database' in _config_dict else {
+    'engine': 'sqlite',
+    'path': 'data/gurudb.sqlite3',
+}
+
 
 if __name__ == '__main__':
     print('Deployment: ', DEPLOYMENT)

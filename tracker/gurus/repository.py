@@ -4,227 +4,229 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from tracker.db import fetch_all, fetch_one, get_conn
 from tracker.gurus.sec_13f import FilingRecord, HoldingRecord
 
 
 class GuruRepository:
-    """Postgres repository for tracked guru data."""
+    """Repository for tracked guru data."""
 
-    def __init__(self, connection):
+    def __init__(self, connection=None):
         self.connection = connection
 
     def upsert_guru(self, guru_name: str, manager_name: str) -> int:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
+        with get_conn() as conn:
+            conn.execute(
                 """
                 INSERT INTO tracked_gurus (guru_name, manager_name, enabled)
-                VALUES (%s, %s, TRUE)
+                VALUES (?, ?, 1)
                 ON CONFLICT (manager_name)
-                DO UPDATE SET guru_name = EXCLUDED.guru_name, updated_at = NOW()
-                RETURNING id
+                DO UPDATE SET guru_name = excluded.guru_name
                 """,
                 (guru_name, manager_name),
             )
-            guru_id = cursor.fetchone()[0]
-        self.connection.commit()
-        return guru_id
+            row = conn.execute(
+                'SELECT id FROM tracked_gurus WHERE manager_name = ?',
+                (manager_name,),
+            ).fetchone()
+            conn.commit()
+        return int(row['id'])
 
     def get_guru_cik(self, guru_id: int) -> str | None:
-        with self.connection.cursor() as cursor:
-            cursor.execute('SELECT cik FROM tracked_gurus WHERE id = %s', (guru_id,))
-            row = cursor.fetchone()
-        return row[0] if row else None
+        row = fetch_one('SELECT cik FROM tracked_gurus WHERE id = ?', (guru_id,))
+        return str(row['cik']) if row and row['cik'] else None
 
     def update_guru_cik(self, guru_id: int, cik: str) -> None:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                'UPDATE tracked_gurus SET cik = %s, updated_at = NOW() WHERE id = %s',
-                (cik, guru_id),
-            )
-        self.connection.commit()
+        with get_conn() as conn:
+            conn.execute('UPDATE tracked_gurus SET cik = ? WHERE id = ?', (cik, guru_id))
+            conn.commit()
 
     def upsert_filing(self, guru_id: int, filing: FilingRecord) -> tuple[int, bool]:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
+        existing = fetch_one(
+            'SELECT id FROM guru_filings WHERE guru_id = ? AND accession_number = ?',
+            (guru_id, filing.accession_number),
+        )
+        inserted = existing is None
+
+        with get_conn() as conn:
+            conn.execute(
                 """
                 INSERT INTO guru_filings (guru_id, accession_number, filing_date, report_period, form_type)
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT (guru_id, accession_number)
-                DO UPDATE SET filing_date = EXCLUDED.filing_date,
-                              report_period = EXCLUDED.report_period,
-                              form_type = EXCLUDED.form_type
-                RETURNING id, xmax = 0 AS inserted
+                DO UPDATE SET filing_date = excluded.filing_date,
+                              report_period = excluded.report_period,
+                              form_type = excluded.form_type
                 """,
                 (
                     guru_id,
                     filing.accession_number,
-                    filing.filing_date,
-                    filing.report_period,
+                    filing.filing_date.isoformat(),
+                    filing.report_period.isoformat() if filing.report_period else None,
                     filing.form_type,
                 ),
             )
-            filing_id, inserted = cursor.fetchone()
-        self.connection.commit()
-        return filing_id, inserted
+            row = conn.execute(
+                'SELECT id FROM guru_filings WHERE guru_id = ? AND accession_number = ?',
+                (guru_id, filing.accession_number),
+            ).fetchone()
+            conn.commit()
+        return int(row['id']), inserted
+
+    def update_filing_status(
+        self,
+        guru_id: int,
+        accession_number: str,
+        fetch_status: str,
+        parse_status: str,
+        error_message: str | None,
+        raw_index_path: str | None,
+        raw_xml_path: str | None,
+    ) -> None:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE guru_filings
+                SET fetch_status = ?,
+                    parse_status = ?,
+                    last_attempt_at = CURRENT_TIMESTAMP,
+                    retry_count = CASE
+                        WHEN ? = 'completed' AND ? = 'completed' THEN retry_count
+                        ELSE retry_count + 1
+                    END,
+                    error_message = ?,
+                    raw_index_path = COALESCE(?, raw_index_path),
+                    raw_xml_path = COALESCE(?, raw_xml_path)
+                WHERE guru_id = ? AND accession_number = ?
+                """,
+                (
+                    fetch_status,
+                    parse_status,
+                    fetch_status,
+                    parse_status,
+                    error_message,
+                    raw_index_path,
+                    raw_xml_path,
+                    guru_id,
+                    accession_number,
+                ),
+            )
+            conn.commit()
 
     def delete_holdings_for_filing(self, filing_id: int) -> None:
-        with self.connection.cursor() as cursor:
-            cursor.execute('DELETE FROM guru_holdings WHERE filing_id = %s', (filing_id,))
-        self.connection.commit()
+        with get_conn() as conn:
+            conn.execute('DELETE FROM guru_holdings WHERE filing_id = ?', (filing_id,))
+            conn.commit()
 
     def insert_holdings(self, filing_id: int, holdings: list[HoldingRecord]) -> None:
         if not holdings:
             return
 
-        with self.connection.cursor() as cursor:
+        with get_conn() as conn:
             args = [
-                (filing_id, h.issuer_name, h.cusip, h.shares, h.value_usd)
+                (filing_id, h.issuer_name, h.cusip, str(h.shares), str(h.value_usd), None, None)
                 for h in holdings
             ]
-            cursor.executemany(
+            conn.executemany(
                 """
-                INSERT INTO guru_holdings (filing_id, issuer_name, cusip, shares, value_usd)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO guru_holdings (filing_id, issuer_name, cusip, shares, value_usd, put_call, discretion)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (filing_id, issuer_name, cusip)
-                DO UPDATE SET shares = EXCLUDED.shares,
-                              value_usd = EXCLUDED.value_usd
+                DO UPDATE SET shares = excluded.shares,
+                              value_usd = excluded.value_usd,
+                              put_call = excluded.put_call,
+                              discretion = excluded.discretion
                 """,
                 args,
             )
-        self.connection.commit()
+            conn.commit()
 
     def latest_two_filings(self, guru_id: int) -> list[tuple[int, str]]:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT id, accession_number
-                FROM guru_filings
-                WHERE guru_id = %s
-                ORDER BY report_period DESC NULLS LAST, filing_date DESC
-                LIMIT 2
-                """,
-                (guru_id,),
-            )
-            return cursor.fetchall()
+        rows = fetch_all(
+            """
+            SELECT id, accession_number
+            FROM guru_filings
+            WHERE guru_id = ?
+            ORDER BY report_period DESC, filing_date DESC
+            LIMIT 2
+            """,
+            (guru_id,),
+        )
+        return [(int(row['id']), str(row['accession_number'])) for row in rows]
 
     def holdings_by_filing(self, filing_id: int) -> dict[str, tuple[str, Decimal]]:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT COALESCE(cusip, ''), issuer_name, COALESCE(shares, 0)
-                FROM guru_holdings
-                WHERE filing_id = %s
-                """,
-                (filing_id,),
-            )
-            rows = cursor.fetchall()
-
+        rows = fetch_all(
+            """
+            SELECT COALESCE(cusip, ''), issuer_name, COALESCE(shares, 0)
+            FROM guru_holdings
+            WHERE filing_id = ?
+            """,
+            (filing_id,),
+        )
         result: dict[str, tuple[str, Decimal]] = {}
-        for cusip, issuer_name, shares in rows:
-            result[str(cusip)] = (issuer_name, Decimal(shares))
+        for row in rows:
+            result[str(row[0])] = (str(row[1]), Decimal(str(row[2])))
         return result
 
     def clear_changes_for_guru(self, guru_id: int) -> None:
-        with self.connection.cursor() as cursor:
-            cursor.execute('DELETE FROM guru_changes WHERE guru_id = %s', (guru_id,))
-        self.connection.commit()
+        with get_conn() as conn:
+            conn.execute('DELETE FROM guru_changes WHERE guru_id = ?', (guru_id,))
+            conn.commit()
 
-    def insert_changes(self, guru_id: int, changes: list[dict]) -> None:
+    def insert_changes(
+        self,
+        guru_id: int,
+        current_filing_id: int,
+        previous_filing_id: int,
+        changes: list[dict],
+    ) -> None:
         if not changes:
             return
 
-        with self.connection.cursor() as cursor:
-            cursor.executemany(
+        with get_conn() as conn:
+            conn.executemany(
                 """
                 INSERT INTO guru_changes (
-                    guru_id, issuer_name, cusip, current_shares, previous_shares,
-                    delta_shares, delta_percent, change_type
+                    guru_id, current_filing_id, previous_filing_id, issuer_name, cusip,
+                    current_shares, previous_shares, delta_shares, delta_percent, change_type
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         guru_id,
+                        current_filing_id,
+                        previous_filing_id,
                         row['issuer_name'],
                         row['cusip'],
-                        row['current_shares'],
-                        row['previous_shares'],
-                        row['delta_shares'],
-                        row['delta_percent'],
+                        str(row['current_shares']),
+                        str(row['previous_shares']),
+                        str(row['delta_shares']),
+                        str(row['delta_percent']) if row['delta_percent'] is not None else None,
                         row['change_type'],
                     )
                     for row in changes
                 ],
             )
-        self.connection.commit()
+            conn.commit()
 
     def enabled_gurus(self) -> list[tuple[int, str]]:
-        with self.connection.cursor() as cursor:
-            cursor.execute('SELECT id, guru_name FROM tracked_gurus WHERE enabled = TRUE')
-            return cursor.fetchall()
+        rows = fetch_all('SELECT id, guru_name FROM tracked_gurus WHERE enabled = 1')
+        return [(int(row['id']), str(row['guru_name'])) for row in rows]
 
-    def get_backfill_progress(self, guru_id: int, accession_number: str) -> dict | None:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT fetch_status, parse_status, retry_count
-                FROM guru_backfill_progress
-                WHERE guru_id = %s AND accession_number = %s
-                """,
-                (guru_id, accession_number),
-            )
-            row = cursor.fetchone()
+    def get_filing_progress(self, guru_id: int, accession_number: str) -> dict | None:
+        row = fetch_one(
+            """
+            SELECT fetch_status, parse_status, retry_count
+            FROM guru_filings
+            WHERE guru_id = ? AND accession_number = ?
+            """,
+            (guru_id, accession_number),
+        )
         if row is None:
             return None
-        return {'fetch_status': row[0], 'parse_status': row[1], 'retry_count': row[2]}
-
-    def upsert_backfill_progress(
-        self,
-        guru_id: int,
-        guru_name: str,
-        manager_name: str,
-        cik: str,
-        accession_number: str,
-        filing_date,
-        fetch_status: str,
-        parse_status: str,
-        error_message: str | None,
-    ) -> None:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO guru_backfill_progress (
-                    guru_id, guru_name, manager_name, cik, accession_number, filing_date,
-                    fetch_status, parse_status, last_attempt_at, retry_count, error_message, updated_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), 0, %s, NOW())
-                ON CONFLICT (guru_id, accession_number)
-                DO UPDATE SET
-                    guru_name = EXCLUDED.guru_name,
-                    manager_name = EXCLUDED.manager_name,
-                    cik = EXCLUDED.cik,
-                    filing_date = EXCLUDED.filing_date,
-                    fetch_status = EXCLUDED.fetch_status,
-                    parse_status = EXCLUDED.parse_status,
-                    last_attempt_at = NOW(),
-                    retry_count = CASE
-                        WHEN EXCLUDED.fetch_status = 'completed' AND EXCLUDED.parse_status = 'completed'
-                            THEN guru_backfill_progress.retry_count
-                        ELSE guru_backfill_progress.retry_count + 1
-                    END,
-                    error_message = EXCLUDED.error_message,
-                    updated_at = NOW()
-                """,
-                (
-                    guru_id,
-                    guru_name,
-                    manager_name,
-                    cik,
-                    accession_number,
-                    filing_date,
-                    fetch_status,
-                    parse_status,
-                    error_message,
-                ),
-            )
-        self.connection.commit()
+        return {
+            'fetch_status': row['fetch_status'],
+            'parse_status': row['parse_status'],
+            'retry_count': row['retry_count'],
+        }

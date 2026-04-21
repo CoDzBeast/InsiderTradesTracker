@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-import os
-
-import psycopg2
-
 from tracker.gurus import BackfillOptions, SEC13FIngestion, ingest_guru_filings, init_schema
 
 
 def main() -> None:
-    dsn = os.environ['DATABASE_URL']
-    with psycopg2.connect(dsn) as connection:
-        init_schema(connection)
-        pipeline = SEC13FIngestion()
-        summary = ingest_guru_filings(
-            connection=connection,
-            pipeline=pipeline,
-            options=BackfillOptions(per_guru_limit=2, limit_gurus=None, resume=True),
-        )
+    init_schema()
+    pipeline = SEC13FIngestion()
+    summary = ingest_guru_filings(
+        connection=None,
+        pipeline=pipeline,
+        options=BackfillOptions(per_guru_limit=2, limit_gurus=None, resume=True),
+    )
     print(summary)
 
 

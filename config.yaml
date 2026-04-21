@@ -1,2 +1,5 @@
 name: name
 email: email@email.com
+database:
+  engine: sqlite
+  path: data/gurudb.sqlite3

@@ -6,8 +6,6 @@ import argparse
 import os
 from pathlib import Path
 
-import psycopg2
-
 from tracker.gurus import BackfillOptions, SEC13FIngestion, ingest_guru_filings, init_schema
 
 
@@ -30,26 +28,23 @@ def main() -> None:
     args = parser.parse_args()
 
     per_guru_limit = 1 if args.latest_only else max(1, args.quarters)
-    dsn = os.environ['DATABASE_URL']
-
     print('[backfill] Starting guru backfill run')
     print(f'[backfill] Config path: {args.config_path}')
     print(f'[backfill] Resume mode: {args.resume}')
     print(f'[backfill] Guru limit: {args.limit_gurus or int(os.environ.get("SEC_GURU_BATCH_SIZE", "20"))}')
     print(f'[backfill] Quarters per guru: {per_guru_limit}')
 
-    with psycopg2.connect(dsn) as connection:
-        init_schema(connection)
-        pipeline = SEC13FIngestion(config_path=Path(args.config_path))
-        summary = ingest_guru_filings(
-            connection=connection,
-            pipeline=pipeline,
-            options=BackfillOptions(
-                per_guru_limit=per_guru_limit,
-                limit_gurus=args.limit_gurus or int(os.environ.get('SEC_GURU_BATCH_SIZE', '20')),
-                resume=args.resume,
-            ),
-        )
+    init_schema()
+    pipeline = SEC13FIngestion(config_path=Path(args.config_path))
+    summary = ingest_guru_filings(
+        connection=None,
+        pipeline=pipeline,
+        options=BackfillOptions(
+            per_guru_limit=per_guru_limit,
+            limit_gurus=args.limit_gurus or int(os.environ.get('SEC_GURU_BATCH_SIZE', '20')),
+            resume=args.resume,
+        ),
+    )
     print(f'[backfill] Completed guru backfill run: {summary}')
 
 
