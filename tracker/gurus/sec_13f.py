@@ -238,7 +238,7 @@ def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: Backfill
                 filing.accession_number,
                 filing.filing_date,
             )
-            progress = repo.get_backfill_progress(guru_id, filing.accession_number)
+            progress = repo.get_filing_progress(guru_id, filing.accession_number)
             if (
                 backfill_options.resume
                 and progress is not None
@@ -250,49 +250,43 @@ def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: Backfill
                 continue
 
             try:
-                repo.upsert_backfill_progress(
-                    guru_id=guru_id,
-                    guru_name=guru_name,
-                    manager_name=manager_name,
-                    cik=cik,
-                    accession_number=filing.accession_number,
-                    filing_date=filing.filing_date,
-                    fetch_status='in_progress',
-                    parse_status='pending',
-                    error_message=None,
-                )
                 filing_id, inserted = repo.upsert_filing(guru_id, filing)
                 if inserted:
                     summary['filings_fetched'] += 1
+                repo.update_filing_status(
+                    guru_id=guru_id,
+                    accession_number=filing.accession_number,
+                    fetch_status='in_progress',
+                    parse_status='pending',
+                    error_message=None,
+                    raw_index_path=filing.index_url,
+                    raw_xml_path=filing.information_table_url,
+                )
 
                 holdings = pipeline.parse_information_table(cik, filing.accession_number, filing.information_table_url)
                 repo.delete_holdings_for_filing(filing_id)
                 repo.insert_holdings(filing_id, holdings)
                 summary['holdings_upserted'] += len(holdings)
 
-                repo.upsert_backfill_progress(
+                repo.update_filing_status(
                     guru_id=guru_id,
-                    guru_name=guru_name,
-                    manager_name=manager_name,
-                    cik=cik,
                     accession_number=filing.accession_number,
-                    filing_date=filing.filing_date,
                     fetch_status='completed',
                     parse_status='completed',
                     error_message=None,
+                    raw_index_path=filing.index_url,
+                    raw_xml_path=filing.information_table_url,
                 )
             except Exception as error:  # pylint: disable=broad-except
                 summary['failures'] += 1
-                repo.upsert_backfill_progress(
+                repo.update_filing_status(
                     guru_id=guru_id,
-                    guru_name=guru_name,
-                    manager_name=manager_name,
-                    cik=cik,
                     accession_number=filing.accession_number,
-                    filing_date=filing.filing_date,
                     fetch_status='failed',
                     parse_status='failed',
                     error_message=str(error),
+                    raw_index_path=filing.index_url,
+                    raw_xml_path=filing.information_table_url,
                 )
                 logger.exception('Failed filing for %s (%s): %s', guru_name, filing.accession_number, error)
 

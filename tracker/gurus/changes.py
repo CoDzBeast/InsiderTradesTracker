@@ -70,7 +70,12 @@ def compute_and_store_changes(connection) -> dict[str, int]:
         changes = classify_changes(current=current, previous=previous)
 
         repo.clear_changes_for_guru(guru_id)
-        repo.insert_changes(guru_id, changes)
+        repo.insert_changes(
+            guru_id=guru_id,
+            current_filing_id=latest_filing_id,
+            previous_filing_id=previous_filing_id,
+            changes=changes,
+        )
 
         summary['gurus'] += 1
         summary['changes'] += len(changes)
