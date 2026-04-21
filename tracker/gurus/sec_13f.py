@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-import requests
-
+from common.logging import Logger
 from defs import PROJECT_PATH
+from tracker.gurus.sec_client import SECRequestClient, SECRequestConfig
 
-SEC_HEADERS = {
-    'User-Agent': 'InsiderTradesTracker/13f-research (contact: config.yaml email)',
-    'Accept-Encoding': 'gzip, deflate',
-    'Host': 'www.sec.gov',
-}
+logger = Logger('gurus.13f').get_logger()
 
 
 @dataclass(slots=True)
@@ -26,6 +23,7 @@ class FilingRecord:
     filing_date: date
     report_period: date | None
     form_type: str
+    index_url: str
     information_table_url: str
 
 
@@ -37,14 +35,28 @@ class HoldingRecord:
     value_usd: Decimal
 
 
+@dataclass(slots=True)
+class BackfillOptions:
+    per_guru_limit: int = 2
+    limit_gurus: int | None = None
+    resume: bool = True
+
+
 class SEC13FIngestion:
     """Ingest 13F filings and holdings for configured gurus."""
 
-    def __init__(self, config_path: Path | None = None, timeout_seconds: int = 30):
+    def __init__(self, config_path: Path | None = None, request_config: SECRequestConfig | None = None):
         self.config_path = config_path or PROJECT_PATH / 'config' / 'tracked_gurus.json'
-        self.timeout_seconds = timeout_seconds
-        self.session = requests.Session()
-        self.session.headers.update(SEC_HEADERS)
+        self.request_config = request_config or SECRequestConfig(
+            user_agent=os.environ.get('SEC_USER_AGENT', 'GuruTracker/0.1 your_email@example.com'),
+            timeout_seconds=int(os.environ.get('SEC_TIMEOUT_SECONDS', '20')),
+            max_retries=int(os.environ.get('SEC_MAX_RETRIES', '5')),
+            base_delay_seconds=float(os.environ.get('SEC_BASE_DELAY_SECONDS', '1.0')),
+            backoff_base_seconds=float(os.environ.get('SEC_BACKOFF_BASE_SECONDS', '2.0')),
+            max_backoff_seconds=float(os.environ.get('SEC_MAX_BACKOFF_SECONDS', '60')),
+            enable_cache=os.environ.get('SEC_ENABLE_CACHE', 'true').lower() == 'true',
+        )
+        self.client = SECRequestClient(config=self.request_config)
 
     def load_tracked_gurus(self) -> list[dict[str, str]]:
         with self.config_path.open(mode='r', encoding='utf-8') as handle:
@@ -52,14 +64,12 @@ class SEC13FIngestion:
 
     def resolve_cik(self, manager_name: str) -> str | None:
         """Resolve manager CIK via SEC company search endpoint."""
-        response = self.session.get(
-            'https://www.sec.gov/cgi-bin/browse-edgar',
-            params={'company': manager_name, 'owner': 'exclude', 'action': 'getcompany', 'output': 'atom'},
-            timeout=self.timeout_seconds,
+        query = manager_name.replace(' ', '+')
+        url = (
+            'https://www.sec.gov/cgi-bin/browse-edgar?'
+            f'company={query}&owner=exclude&action=getcompany&output=atom'
         )
-        response.raise_for_status()
-
-        text = response.text
+        text = self.client.get_content(url).decode('utf-8', errors='ignore')
         marker = '<cik>'
         start = text.find(marker)
         if start == -1:
@@ -73,12 +83,10 @@ class SEC13FIngestion:
         return text[start:end].strip().zfill(10)
 
     def fetch_submissions(self, cik: str) -> dict:
-        response = self.session.get(
+        return self.client.get_json(
             f'https://data.sec.gov/submissions/CIK{cik}.json',
-            timeout=self.timeout_seconds,
+            cache_key=f'submissions/CIK{cik}.json',
         )
-        response.raise_for_status()
-        return response.json()
 
     def latest_13f_filings(self, submissions: dict, limit: int = 2) -> list[FilingRecord]:
         recent = submissions.get('filings', {}).get('recent', {})
@@ -96,10 +104,8 @@ class SEC13FIngestion:
 
             accession_number = accession_numbers[idx]
             accession_nodash = accession_number.replace('-', '')
-            primary_url = (
-                f'https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_nodash}/index.json'
-            )
-            info_table_url = self.find_information_table(primary_url)
+            index_url = f'https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_nodash}/index.json'
+            info_table_url = self.find_information_table(cik, accession_number, index_url)
             if info_table_url is None:
                 continue
 
@@ -113,6 +119,7 @@ class SEC13FIngestion:
                     filing_date=date.fromisoformat(filing_dates[idx]),
                     report_period=report_period,
                     form_type=form_type,
+                    index_url=index_url,
                     information_table_url=info_table_url,
                 )
             )
@@ -122,13 +129,12 @@ class SEC13FIngestion:
 
         return filings
 
-    def find_information_table(self, filing_index_json_url: str) -> str | None:
-        response = self.session.get(filing_index_json_url, timeout=self.timeout_seconds)
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-
-        payload = response.json()
+    def find_information_table(self, cik: str, accession_number: str, filing_index_json_url: str) -> str | None:
+        accession_nodash = accession_number.replace('-', '')
+        payload = self.client.get_json(
+            filing_index_json_url,
+            cache_key=f'filings/{cik}/{accession_nodash}/index.json',
+        )
         items = payload.get('directory', {}).get('item', [])
         for item in items:
             filename = item.get('name', '')
@@ -143,11 +149,13 @@ class SEC13FIngestion:
 
         return None
 
-    def parse_information_table(self, information_table_url: str) -> list[HoldingRecord]:
-        response = self.session.get(information_table_url, timeout=self.timeout_seconds)
-        response.raise_for_status()
+    def parse_information_table(self, cik: str, accession_number: str, information_table_url: str) -> list[HoldingRecord]:
+        xml_content = self.client.get_content(
+            information_table_url,
+            cache_key=f'filings/{cik}/{accession_number.replace("-", "")}/informationTable.xml',
+        )
 
-        root = ET.fromstring(response.content)
+        root = ET.fromstring(xml_content)
         ns = {'n': 'http://www.sec.gov/edgar/document/thirteenf/informationtable'}
 
         records: list[HoldingRecord] = []
@@ -170,46 +178,111 @@ class SEC13FIngestion:
         return records
 
 
-# pylint: disable=too-many-arguments
+# pylint: disable=too-many-branches,too-many-locals
 
-def ingest_guru_filings(connection, pipeline: SEC13FIngestion, per_guru_limit: int = 2) -> dict[str, int]:
-    """Load gurus from config, resolve CIKs, and store latest 13F filings + holdings."""
+def ingest_guru_filings(connection, pipeline: SEC13FIngestion, options: BackfillOptions | None = None) -> dict[str, int]:
+    """Load gurus from config and store selected 13F filings + holdings safely."""
 
     from tracker.gurus.repository import GuruRepository
 
+    backfill_options = options or BackfillOptions()
     repo = GuruRepository(connection)
-    summary = {'gurus': 0, 'filings': 0, 'holdings': 0}
+    summary = {
+        'gurus_processed': 0,
+        'filings_fetched': 0,
+        'holdings_upserted': 0,
+        'cached_hits': 0,
+        'failures': 0,
+        'skipped': 0,
+    }
 
-    for guru in pipeline.load_tracked_gurus():
-        guru_id = repo.upsert_guru(
-            guru_name=guru['guru_name'],
-            manager_name=guru['manager_name'],
-        )
+    gurus = pipeline.load_tracked_gurus()
+    if backfill_options.limit_gurus is not None:
+        gurus = gurus[:backfill_options.limit_gurus]
+
+    for guru in gurus:
+        guru_name = guru['guru_name']
+        manager_name = guru['manager_name']
+        logger.info('Processing guru: %s (%s)', guru_name, manager_name)
+
+        guru_id = repo.upsert_guru(guru_name=guru_name, manager_name=manager_name)
 
         cik = repo.get_guru_cik(guru_id)
         if cik is None:
-            cik = pipeline.resolve_cik(guru['manager_name'])
+            cik = pipeline.resolve_cik(manager_name)
             if cik is not None:
                 repo.update_guru_cik(guru_id, cik)
 
         if cik is None:
+            logger.warning('Skipping guru with unresolved CIK: %s', manager_name)
+            summary['skipped'] += 1
             continue
 
         submissions = pipeline.fetch_submissions(cik)
-        filings = pipeline.latest_13f_filings(submissions, limit=per_guru_limit)
-
-        summary['gurus'] += 1
+        filings = pipeline.latest_13f_filings(submissions, limit=backfill_options.per_guru_limit)
+        summary['gurus_processed'] += 1
 
         for filing in filings:
-            filing_id, inserted = repo.upsert_filing(guru_id, filing)
-            if inserted:
-                summary['filings'] += 1
+            progress = repo.get_backfill_progress(guru_id, filing.accession_number)
+            if (
+                backfill_options.resume
+                and progress is not None
+                and progress['fetch_status'] == 'completed'
+                and progress['parse_status'] == 'completed'
+            ):
+                logger.info('Skipping completed filing: %s %s', guru_name, filing.accession_number)
+                summary['skipped'] += 1
+                continue
 
-            repo.delete_holdings_for_filing(filing_id)
-            holdings = pipeline.parse_information_table(filing.information_table_url)
-            repo.insert_holdings(filing_id, holdings)
-            summary['holdings'] += len(holdings)
+            try:
+                repo.upsert_backfill_progress(
+                    guru_id=guru_id,
+                    guru_name=guru_name,
+                    manager_name=manager_name,
+                    cik=cik,
+                    accession_number=filing.accession_number,
+                    filing_date=filing.filing_date,
+                    fetch_status='in_progress',
+                    parse_status='pending',
+                    error_message=None,
+                )
+                filing_id, inserted = repo.upsert_filing(guru_id, filing)
+                if inserted:
+                    summary['filings_fetched'] += 1
 
+                holdings = pipeline.parse_information_table(cik, filing.accession_number, filing.information_table_url)
+                repo.delete_holdings_for_filing(filing_id)
+                repo.insert_holdings(filing_id, holdings)
+                summary['holdings_upserted'] += len(holdings)
+
+                repo.upsert_backfill_progress(
+                    guru_id=guru_id,
+                    guru_name=guru_name,
+                    manager_name=manager_name,
+                    cik=cik,
+                    accession_number=filing.accession_number,
+                    filing_date=filing.filing_date,
+                    fetch_status='completed',
+                    parse_status='completed',
+                    error_message=None,
+                )
+            except Exception as error:  # pylint: disable=broad-except
+                summary['failures'] += 1
+                repo.upsert_backfill_progress(
+                    guru_id=guru_id,
+                    guru_name=guru_name,
+                    manager_name=manager_name,
+                    cik=cik,
+                    accession_number=filing.accession_number,
+                    filing_date=filing.filing_date,
+                    fetch_status='failed',
+                    parse_status='failed',
+                    error_message=str(error),
+                )
+                logger.exception('Failed filing for %s (%s): %s', guru_name, filing.accession_number, error)
+
+    summary['cached_hits'] = int(getattr(pipeline.client, 'cache_hits', 0))
+    logger.info('Backfill summary: %s', summary)
     return summary
 
 
