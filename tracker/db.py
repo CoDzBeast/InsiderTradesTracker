@@ -126,6 +126,7 @@ def init_db() -> None:
                 guru_id INTEGER NOT NULL,
                 current_filing_id INTEGER NOT NULL,
                 previous_filing_id INTEGER NOT NULL,
+                company_id INTEGER,
                 issuer_name TEXT NOT NULL,
                 cusip TEXT,
                 current_shares NUMERIC,
@@ -135,7 +136,8 @@ def init_db() -> None:
                 change_type TEXT NOT NULL,
                 FOREIGN KEY (guru_id) REFERENCES tracked_gurus(id) ON DELETE CASCADE,
                 FOREIGN KEY (current_filing_id) REFERENCES guru_filings(id) ON DELETE CASCADE,
-                FOREIGN KEY (previous_filing_id) REFERENCES guru_filings(id) ON DELETE CASCADE
+                FOREIGN KEY (previous_filing_id) REFERENCES guru_filings(id) ON DELETE CASCADE,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS companies (
@@ -186,6 +188,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_guru_holdings_company_id ON guru_holdings(company_id);
             CREATE INDEX IF NOT EXISTS idx_guru_holdings_match_status ON guru_holdings(match_status);
             CREATE INDEX IF NOT EXISTS idx_guru_changes_guru_id ON guru_changes(guru_id);
+            CREATE INDEX IF NOT EXISTS idx_guru_changes_company_id ON guru_changes(company_id);
             CREATE INDEX IF NOT EXISTS idx_companies_cusip ON companies(cusip);
             CREATE INDEX IF NOT EXISTS idx_companies_normalized_name ON companies(normalized_company_name);
             CREATE INDEX IF NOT EXISTS idx_companies_sector_bucket ON companies(sector_bucket);
@@ -215,9 +218,12 @@ def init_db() -> None:
         _ensure_column(conn, 'guru_holdings', 'match_status', "TEXT NOT NULL DEFAULT 'unmapped'")
         _ensure_column(conn, 'guru_holdings', 'match_confidence', "REAL")
         _ensure_column(conn, 'guru_holdings', 'match_notes', "TEXT")
+        _ensure_column(conn, 'guru_changes', 'company_id', "INTEGER REFERENCES companies(id) ON DELETE SET NULL")
 
         _backfill_identity_columns(conn)
         _seed_sic_sector_map(conn)
+        _ensure_metadata_table(conn)
+        _upsert_schema_version(conn, version='1')
 
         conn.commit()
 
@@ -260,4 +266,50 @@ def _backfill_identity_columns(conn: sqlite3.Connection) -> None:
         SET raw_issuer_name = COALESCE(raw_issuer_name, issuer_name)
         WHERE raw_issuer_name IS NULL
         """
+    )
+    conn.execute(
+        """
+        UPDATE guru_holdings
+        SET normalized_issuer_name = LOWER(
+            TRIM(
+                REPLACE(
+                    REPLACE(
+                        REPLACE(COALESCE(raw_issuer_name, issuer_name, ''), '.', ' '),
+                    ',', ' '),
+                '&', ' and ')
+            )
+        )
+        WHERE normalized_issuer_name IS NULL OR TRIM(normalized_issuer_name) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE guru_holdings
+        SET cusip = UPPER(TRIM(cusip))
+        WHERE cusip IS NOT NULL
+        """
+    )
+
+
+def _ensure_metadata_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
+def _upsert_schema_version(conn: sqlite3.Connection, version: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO app_metadata (key, value, updated_at)
+        VALUES ('schema_version', ?, CURRENT_TIMESTAMP)
+        ON CONFLICT (key)
+        DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+        """,
+        (version,),
     )

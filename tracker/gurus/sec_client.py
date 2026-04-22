@@ -6,6 +6,7 @@ import json
 import random
 import time
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import requests
@@ -42,7 +43,7 @@ class SECRequestClient:
             {
                 'User-Agent': self.config.user_agent,
                 'Accept-Encoding': 'gzip, deflate',
-                'Host': 'www.sec.gov',
+                'Accept': 'application/json, text/xml, application/xml, text/plain, */*',
             }
         )
         self.last_request_at = 0.0
@@ -101,7 +102,7 @@ class SECRequestClient:
                 if attempt >= self.config.max_retries - 1:
                     logger.error('SEC request failed after retries: %s (%s)', url, error)
                     raise
-                sleep_seconds = self._compute_backoff(attempt)
+                sleep_seconds = self._compute_backoff(attempt, response)
                 logger.warning(
                     'Retrying SEC request (attempt %s/%s) after %.2fs: %s',
                     attempt + 1,
@@ -115,12 +116,13 @@ class SECRequestClient:
             raise RuntimeError(f'SEC request failed: {url}')
         return response
 
-    def _compute_backoff(self, attempt: int) -> float:
+    def _compute_backoff(self, attempt: int, response: requests.Response | None = None) -> float:
         base_sleep = min(
             self.config.max_backoff_seconds,
             self.config.backoff_base_seconds * (2 ** attempt),
         )
         jitter = random.uniform(0.0, 0.5)
+        retry_after = self._retry_after_seconds(response)
         cooldown = 0.0
         if self.consecutive_failures >= 3:
             cooldown = min(
@@ -128,7 +130,25 @@ class SECRequestClient:
                 self.config.backoff_base_seconds * self.consecutive_failures,
             )
             logger.warning('SEC cooldown engaged for %.2fs after repeated failures', cooldown)
-        return min(self.config.max_backoff_seconds, base_sleep + jitter + cooldown)
+        computed_sleep = base_sleep + jitter + cooldown
+        if retry_after is not None:
+            computed_sleep = max(computed_sleep, retry_after)
+        return min(self.config.max_backoff_seconds, computed_sleep)
+
+    def _retry_after_seconds(self, response: requests.Response | None) -> float | None:
+        if response is None:
+            return None
+        value = response.headers.get('Retry-After')
+        if not value:
+            return None
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            try:
+                parsed = parsedate_to_datetime(value)
+                return max(0.0, parsed.timestamp() - time.time())
+            except (TypeError, ValueError):
+                return None
 
     def _throttle(self) -> None:
         elapsed = time.monotonic() - self.last_request_at
