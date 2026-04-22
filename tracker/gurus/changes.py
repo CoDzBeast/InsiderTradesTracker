@@ -4,20 +4,38 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from tracker.gurus.repository import GuruRepository
+def _canonical_key(row: dict) -> str:
+    company_id = row.get('company_id')
+    if company_id is not None:
+        return f'company:{int(company_id)}'
+    cusip = str(row.get('cusip') or '').strip().upper()
+    if cusip:
+        return f'cusip:{cusip}'
+    return f"name:{str(row.get('issuer_name') or '').strip().lower()}"
 
 
-def classify_changes(current: dict, previous: dict) -> list[dict]:
+def classify_changes(current: list[dict], previous: list[dict]) -> list[dict]:
     """Classify position changes as NEW/ADD/REDUCE/EXIT."""
 
-    all_cusips = set(current) | set(previous)
+    current_by_key = {_canonical_key(row): row for row in current}
+    previous_by_key = {_canonical_key(row): row for row in previous}
+    all_keys = set(current_by_key) | set(previous_by_key)
     rows: list[dict] = []
 
-    for cusip in sorted(all_cusips):
-        cur_issuer, cur_shares = current.get(cusip, ('', Decimal('0')))
-        prev_issuer, prev_shares = previous.get(cusip, ('', Decimal('0')))
+    for key in sorted(all_keys):
+        cur_row = current_by_key.get(key, {})
+        prev_row = previous_by_key.get(key, {})
+
+        cur_issuer = str(cur_row.get('issuer_name') or '')
+        prev_issuer = str(prev_row.get('issuer_name') or '')
+        cur_cusip = str(cur_row.get('cusip') or '').strip().upper()
+        prev_cusip = str(prev_row.get('cusip') or '').strip().upper()
+        cur_shares = Decimal(str(cur_row.get('shares') or '0'))
+        prev_shares = Decimal(str(prev_row.get('shares') or '0'))
 
         issuer_name = cur_issuer or prev_issuer
+        cusip = cur_cusip or prev_cusip
+        company_id = cur_row.get('company_id') or prev_row.get('company_id')
         delta = cur_shares - prev_shares
 
         if prev_shares == 0 and cur_shares > 0:
@@ -40,6 +58,7 @@ def classify_changes(current: dict, previous: dict) -> list[dict]:
             {
                 'issuer_name': issuer_name,
                 'cusip': cusip,
+                'company_id': company_id,
                 'current_shares': cur_shares,
                 'previous_shares': prev_shares,
                 'delta_shares': delta,
@@ -54,6 +73,8 @@ def classify_changes(current: dict, previous: dict) -> list[dict]:
 def compute_and_store_changes(connection) -> dict[str, int]:
     """Compute QoQ changes for each enabled guru and write to guru_changes."""
 
+    from tracker.gurus.repository import GuruRepository
+
     repo = GuruRepository(connection)
     summary = {'gurus': 0, 'changes': 0}
 
@@ -65,8 +86,8 @@ def compute_and_store_changes(connection) -> dict[str, int]:
         latest_filing_id = filings[0][0]
         previous_filing_id = filings[1][0]
 
-        current = repo.holdings_by_filing(latest_filing_id)
-        previous = repo.holdings_by_filing(previous_filing_id)
+        current = repo.holdings_snapshot_by_filing(latest_filing_id)
+        previous = repo.holdings_snapshot_by_filing(previous_filing_id)
         changes = classify_changes(current=current, previous=previous)
 
         repo.clear_changes_for_guru(guru_id)

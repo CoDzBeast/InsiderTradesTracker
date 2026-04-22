@@ -134,7 +134,7 @@ class GuruRepository:
                     h.issuer_name,
                     h.issuer_name,
                     identity.normalize_name(h.issuer_name),
-                    h.cusip,
+                    _normalize_cusip(h.cusip),
                     str(h.shares),
                     str(h.value_usd),
                     None,
@@ -194,6 +194,17 @@ class GuruRepository:
             result[str(row[0])] = (str(row[1]), Decimal(str(row[2])))
         return result
 
+    def holdings_snapshot_by_filing(self, filing_id: int) -> list[dict]:
+        rows = fetch_all(
+            """
+            SELECT id, issuer_name, COALESCE(cusip, '') AS cusip, COALESCE(shares, 0) AS shares, company_id
+            FROM guru_holdings
+            WHERE filing_id = ?
+            """,
+            (filing_id,),
+        )
+        return [dict(row) for row in rows]
+
     def clear_changes_for_guru(self, guru_id: int) -> None:
         with get_conn() as conn:
             conn.execute('DELETE FROM guru_changes WHERE guru_id = ?', (guru_id,))
@@ -213,18 +224,19 @@ class GuruRepository:
             conn.executemany(
                 """
                 INSERT INTO guru_changes (
-                    guru_id, current_filing_id, previous_filing_id, issuer_name, cusip,
+                    guru_id, current_filing_id, previous_filing_id, company_id, issuer_name, cusip,
                     current_shares, previous_shares, delta_shares, delta_percent, change_type
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         guru_id,
                         current_filing_id,
                         previous_filing_id,
+                        row.get('company_id'),
                         row['issuer_name'],
-                        row['cusip'],
+                        _normalize_cusip(row['cusip']),
                         str(row['current_shares']),
                         str(row['previous_shares']),
                         str(row['delta_shares']),
@@ -418,6 +430,7 @@ class GuruRepository:
         classification_status: str = 'matched',
         needs_review: bool = False,
     ) -> int:
+        normalized_cusip = _normalize_cusip(cusip)
         with get_conn() as conn:
             conn.execute(
                 """
@@ -445,7 +458,7 @@ class GuruRepository:
                 (
                     cik,
                     ticker,
-                    cusip,
+                    normalized_cusip,
                     company_name,
                     sic_code,
                     sic_description,
@@ -460,7 +473,7 @@ class GuruRepository:
             )
             row = conn.execute(
                 'SELECT id FROM companies WHERE company_name = ? AND ((cusip = ?) OR (cusip IS NULL AND ? IS NULL))',
-                (company_name, cusip, cusip),
+                (company_name, normalized_cusip, normalized_cusip),
             ).fetchone()
             conn.commit()
         return int(row['id'])
@@ -509,7 +522,7 @@ class GuruRepository:
     def find_company_by_cusip(self, cusip: str):
         return fetch_one(
             "SELECT * FROM companies WHERE cusip = ? ORDER BY updated_at DESC LIMIT 1",
-            (cusip,),
+            (_normalize_cusip(cusip),),
         )
 
     def find_company_by_normalized_name(self, normalized_name: str):
@@ -590,11 +603,7 @@ class GuruRepository:
             """
             SELECT c.sector_bucket, COUNT(1) AS positions_count
             FROM guru_changes gc
-            JOIN guru_filings f ON f.id = gc.current_filing_id
-            JOIN guru_holdings h ON h.filing_id = f.id
-                AND h.issuer_name = gc.issuer_name
-                AND COALESCE(h.cusip, '') = COALESCE(gc.cusip, '')
-            JOIN companies c ON c.id = h.company_id
+            JOIN companies c ON c.id = gc.company_id
             WHERE gc.change_type = ? AND c.sector_bucket IS NOT NULL
             GROUP BY c.sector_bucket
             ORDER BY positions_count DESC
@@ -611,11 +620,7 @@ class GuruRepository:
                  - SUM(CASE WHEN gc.change_type IN ('EXIT', 'REDUCE') THEN 1 ELSE 0 END)
                    AS net_movement
             FROM guru_changes gc
-            JOIN guru_filings f ON f.id = gc.current_filing_id
-            JOIN guru_holdings h ON h.filing_id = f.id
-                AND h.issuer_name = gc.issuer_name
-                AND COALESCE(h.cusip, '') = COALESCE(gc.cusip, '')
-            JOIN companies c ON c.id = h.company_id
+            JOIN companies c ON c.id = gc.company_id
             WHERE c.sector_bucket IS NOT NULL
             GROUP BY c.sector_bucket
             ORDER BY net_movement DESC
@@ -654,11 +659,7 @@ class GuruRepository:
             SELECT DISTINCT g.id AS guru_id, g.guru_name, g.manager_name, c.sector_bucket
             FROM guru_changes gc
             JOIN tracked_gurus g ON g.id = gc.guru_id
-            JOIN guru_filings f ON f.id = gc.current_filing_id
-            JOIN guru_holdings h ON h.filing_id = f.id
-                AND h.issuer_name = gc.issuer_name
-                AND COALESCE(h.cusip, '') = COALESCE(gc.cusip, '')
-            JOIN companies c ON c.id = h.company_id
+            JOIN companies c ON c.id = gc.company_id
             WHERE gc.change_type IN ('NEW', 'ADD')
               AND c.sector_bucket = ?
             ORDER BY g.guru_name
@@ -750,3 +751,8 @@ class GuruRepository:
             """
         )
         return [dict(row) for row in rows]
+
+
+def _normalize_cusip(cusip: str | None) -> str | None:
+    cleaned = (cusip or '').strip().upper()
+    return cleaned or None

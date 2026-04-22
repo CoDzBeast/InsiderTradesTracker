@@ -16,7 +16,7 @@ Core tables:
 - `tracked_gurus`
 - `guru_filings`
 - `guru_holdings`
-- `guru_changes`
+- `guru_changes` (includes `company_id` for robust canonical-sector rollups)
 - `companies` (SEC enrichment + internal sector buckets)
 - `sic_sector_map` (maintainable SEC-to-internal mapping rules)
 
@@ -27,8 +27,11 @@ Schema and DB bootstrap live in `tracker/db.py`.
 - `python scripts/init_db.py` – create data folder + SQLite DB + all required tables.
 - `python scripts/backfill_gurus.py --resume --quarters 2 --limit-gurus 5` – polite/resumable safe backfill.
 - `python scripts/update_gurus.py` – incremental latest filings refresh.
-- `python scripts/compute_changes.py` – compute and persist QoQ changes.
+- `python scripts/compute_changes.py` – compute and persist QoQ changes (keyed by canonical company identity when available).
 - `python scripts/enrich_companies.py --show-unmapped` – enrich holdings with SEC SIC inputs and map into canonical sectors.
+- `python scripts/rematch_companies.py --limit 500` – rerun canonical company identity matching on unresolved holdings.
+- `python scripts/review_queue.py --holdings-limit 100 --companies-limit 100` – print unresolved/review queues.
+- `python scripts/run_guru_backend.py --resume --quarters 2 --limit-gurus 5` – end-to-end backend run.
 
 ### Safe SEC backfill settings (environment variables)
 
